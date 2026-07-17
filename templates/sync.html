@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Sync — Chess DB{% endblock %}
+{% block content %}
+<h1>Sync</h1>
+
+<div class="sync-cards">
+  <div class="card">
+    <h2>Chess.com</h2>
+    <p>Fetch all games for a chess.com username. Re-running skips unchanged months.</p>
+    <form method="post" action="{{ url_for('sync_chesscom') }}">
+      <input type="text" name="username" placeholder="chess.com username" required>
+      <button type="submit">Sync</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Lichess</h2>
+    <p>Fetch all games for a Lichess username. Re-running only fetches games since the last sync.</p>
+    <form method="post" action="{{ url_for('sync_lichess') }}">
+      <input type="text" name="username" placeholder="Lichess username" required>
+      <button type="submit">Sync</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Manual PGN</h2>
+    <p>Paste a PGN to add an OTB or manually-entered game. Coming soon.</p>
+  </div>
+</div>
+{% endblock %}

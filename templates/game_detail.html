@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}{{ game.white.display_name }} vs {{ game.black.display_name }} — Chess DB{% endblock %}
+
+{% block content %}
+<div class="game-header">
+  <h1>
+    <a href="{{ url_for('player_detail', player_id=game.white.player_id) }}">{{ game.white.title ~ ' ' if game.white.title }}{{ game.white.display_name }}</a>
+    <span class="rating">{{ game.white_rating or '' }}</span>
+    vs
+    <a href="{{ url_for('player_detail', player_id=game.black.player_id) }}">{{ game.black.title ~ ' ' if game.black.title }}{{ game.black.display_name }}</a>
+    <span class="rating">{{ game.black_rating or '' }}</span>
+  </h1>
+  <div class="game-meta">
+    <span>{{ game.result }}</span>
+    <span>{{ game.time_class|capitalize if game.time_class else '' }} {{ game.time_control }}</span>
+    <span>{{ game.played_at.strftime('%b %d, %Y') if game.played_at else '' }}</span>
+    {% if game.opening %}<span>{{ game.opening.eco }} {{ game.opening.name }}</span>{% endif %}
+    {% if game.termination %}<span>{{ game.termination }}</span>{% endif %}
+    {% if game.source_url %}<a href="{{ game.source_url }}" target="_blank" rel="noopener">View on {{ game.source }}</a>{% endif %}
+  </div>
+</div>
+
+<div class="game-viewer">
+  <div class="board-col">
+    <div id="board" class="board"></div>
+    <div class="board-controls">
+      <button id="btn-start" title="Go to start">⏮</button>
+      <button id="btn-prev" title="Previous move">◀</button>
+      <button id="btn-next" title="Next move">▶</button>
+      <button id="btn-end" title="Go to end">⏭</button>
+      <button id="btn-flip" title="Flip board">🔄</button>
+    </div>
+  </div>
+
+  <div class="side-col">
+    <div id="move-list" class="move-list"></div>
+
+    <div class="tags-section">
+      <h3>Tags</h3>
+      <div id="game-tags" class="tag-chips">
+        {% for tag in game.tags %}
+        <span class="tag-chip" style="--tag-color: {{ tag.color }}" data-id="{{ tag.tag_id }}">
+          {{ tag.name }} <button onclick="toggleTag({{ tag.tag_id }})">&times;</button>
+        </span>
+        {% endfor %}
+      </div>
+      <div class="tag-add">
+        <select id="tag-select">
+          <option value="">Add tag…</option>
+          {% for tag in all_tags %}
+          <option value="{{ tag.tag_id }}">{{ tag.name }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" id="new-tag-name" placeholder="or create new…" size="12">
+        <button onclick="addTag()">+</button>
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('update_notes', game_id=game.game_id) }}" class="notes-form">
+      <h3>Notes</h3>
+      <textarea name="notes" rows="4" placeholder="Your notes on this game…">{{ game.notes or '' }}</textarea>
+      <button type="submit">Save notes</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { Chessground } from 'https://esm.sh/chessground@9.1.1';
+import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+
+const pgn = {{ game.pgn|tojson }};
+const chess = new Chess();
+chess.loadPgn(pgn);
+const history = chess.history({ verbose: true });
+
+// Build position list
+chess.reset();
+const positions = [{ fen: chess.fen(), san: null, from: null, to: null }];
+for (const m of history) {
+  chess.move(m);
+  positions.push({ fen: chess.fen(), san: m.san, from: m.from, to: m.to });
+}
+
+// Init board
+let orientation = 'white';
+{% if game.black.is_self %}
+orientation = 'black';
+{% endif %}
+
+const boardEl = document.getElementById('board');
+const cg = Chessground(boardEl, {
+  fen: positions[0].fen,
+  orientation: orientation,
+  viewOnly: true,
+  coordinates: true,
+  animation: { duration: 150 },
+});
+
+let current = 0;
+
+function goTo(idx) {
+  idx = Math.max(0, Math.min(idx, positions.length - 1));
+  current = idx;
+  const pos = positions[idx];
+  cg.set({
+    fen: pos.fen,
+    lastMove: pos.from && pos.to ? [pos.from, pos.to] : undefined,
+  });
+  // Update move list highlighting
+  document.querySelectorAll('.move-list .move').forEach((el, i) => {
+    el.classList.toggle('active', i + 1 === idx);
+  });
+  // Scroll active move into view
+  const active = document.querySelector('.move-list .move.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+// Build move list HTML
+const moveListEl = document.getElementById('move-list');
+let html = '';
+for (let i = 0; i < history.length; i++) {
+  if (i % 2 === 0) html += `<span class="move-number">${Math.floor(i / 2) + 1}.</span>`;
+  html += `<span class="move" data-idx="${i + 1}">${history[i].san}</span>`;
+}
+moveListEl.innerHTML = html;
+
+// Click moves
+moveListEl.addEventListener('click', (e) => {
+  const move = e.target.closest('.move');
+  if (move) goTo(parseInt(move.dataset.idx));
+});
+
+// Buttons
+document.getElementById('btn-start').addEventListener('click', () => goTo(0));
+document.getElementById('btn-prev').addEventListener('click', () => goTo(current - 1));
+document.getElementById('btn-next').addEventListener('click', () => goTo(current + 1));
+document.getElementById('btn-end').addEventListener('click', () => goTo(positions.length - 1));
+document.getElementById('btn-flip').addEventListener('click', () => {
+  orientation = orientation === 'white' ? 'black' : 'white';
+  cg.set({ orientation });
+});
+
+// Keyboard navigation
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(current - 1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); goTo(current + 1); }
+  if (e.key === 'Home') { e.preventDefault(); goTo(0); }
+  if (e.key === 'End') { e.preventDefault(); goTo(positions.length - 1); }
+});
+</script>
+
+<script>
+// Tag management (plain JS, no module needed)
+async function toggleTag(tagId) {
+  const resp = await fetch('/api/games/{{ game.game_id }}/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_id: tagId }),
+  });
+  if (resp.ok) location.reload();
+}
+
+async function addTag() {
+  const select = document.getElementById('tag-select');
+  const nameInput = document.getElementById('new-tag-name');
+
+  if (select.value) {
+    await toggleTag(parseInt(select.value));
+    return;
+  }
+
+  const name = nameInput.value.trim();
+  if (!name) return;
+
+  // Create tag first, then toggle it onto the game
+  const createResp = await fetch('/api/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!createResp.ok) return;
+  const tag = await createResp.json();
+  await toggleTag(tag.tag_id);
+}
+</script>
+{% endblock %}

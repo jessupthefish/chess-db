@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Collections — Chess DB{% endblock %}
+{% block content %}
+<h1>Collections</h1>
+
+<form method="post" action="{{ url_for('create_collection') }}" class="new-collection">
+  <input type="text" name="name" placeholder="New collection name…" required>
+  <input type="text" name="description" placeholder="Description (optional)">
+  <button type="submit">Create</button>
+</form>
+
+{% if collections %}
+<div class="collection-grid">
+  {% for c in collections %}
+  <a href="{{ url_for('collection_detail', coll_id=c.collection_id) }}" class="card clickable">
+    <h3>{{ c.name }}</h3>
+    <p>{{ c.description or '' }}</p>
+    <span class="count">{{ c.games|length }} games</span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No collections yet. Create one above.</p>
+{% endif %}
+{% endblock %}

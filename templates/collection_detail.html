@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ collection.name }} — Chess DB{% endblock %}
+{% block content %}
+<h1>{{ collection.name }}</h1>
+{% if collection.description %}<p>{{ collection.description }}</p>{% endif %}
+
+{% if collection.games %}
+<table class="game-table">
+  <thead>
+    <tr><th>Date</th><th>White</th><th>Black</th><th>Result</th><th>Opening</th></tr>
+  </thead>
+  <tbody>
+    {% for g in collection.games %}
+    <tr onclick="location.href='{{ url_for('game_detail', game_id=g.game_id) }}'" class="clickable">
+      <td class="date">{{ g.played_at.strftime('%Y-%m-%d') if g.played_at else '—' }}</td>
+      <td>{{ g.white.display_name }}</td>
+      <td>{{ g.black.display_name }}</td>
+      <td class="result">{{ g.result }}</td>
+      <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No games in this collection. Add games from the game detail page.</p>
+{% endif %}
+{% endblock %}

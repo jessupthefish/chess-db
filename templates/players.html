@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Players — Chess DB{% endblock %}
+{% block content %}
+<h1>Players</h1>
+
+<form class="filters" method="get" action="{{ url_for('players_list') }}">
+  <input type="text" name="q" placeholder="Search players…" value="{{ q }}">
+  <select name="tag" onchange="this.form.submit()">
+    <option value="">All tags</option>
+    {% for tag in all_tags %}
+    <option value="{{ tag.name }}" {{ 'selected' if tag_name == tag.name }}>{{ tag.name }}</option>
+    {% endfor %}
+  </select>
+  {% if not q and not tag_name %}
+  <label class="inline-check">
+    <input type="checkbox" name="show" value="all" onchange="this.form.submit()" {{ 'checked' if show == 'all' }}>
+    Show all opponents ({{ 'currently self + friends only' if show != 'all' }})
+  </label>
+  {% endif %}
+  <button type="submit">Search</button>
+  {% if q or show == 'all' or tag_name %}
+  <a href="{{ url_for('players_list') }}" class="btn-link">Clear</a>
+  {% endif %}
+</form>
+
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Title</th>
+      <th>Accounts</th>
+      <th>Games</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p, game_count in players %}
+    <tr onclick="location.href='{{ url_for('player_detail', player_id=p.player_id) }}'" class="clickable">
+      <td>
+        {{ p.display_name }}
+        {% if p.is_self %}<span class="badge self">you</span>{% endif %}
+        {% if p.is_friend %}<span class="badge friend">friend</span>{% endif %}
+        {% for tag in p.tags %}
+        <span class="tag-chip tag-chip-static" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
+        {% endfor %}
+      </td>
+      <td>{{ p.title or '' }}</td>
+      <td>
+        {% for ident in p.identities %}
+        <span class="source-badge {{ ident.source }}">{{ ident.source }}:{{ ident.username }}</span>
+        {% endfor %}
+      </td>
+      <td>{{ game_count }}</td>
+      <td>
+        {% if not p.is_self %}
+        <form method="post" action="{{ url_for('toggle_friend', player_id=p.player_id) }}" class="inline-form">
+          <button type="submit" class="btn-small">{{ '★' if p.is_friend else '☆' }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not players %}
+<p class="empty">No players found.</p>
+{% endif %}
+
+{% if pagination %}
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('players_list', page=pagination.prev_num, show=show, q=q, tag=tag_name) }}">&larr; Prev</a>
+  {% endif %}
+  <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
+  {% if pagination.has_next %}
+  <a href="{{ url_for('players_list', page=pagination.next_num, show=show, q=q, tag=tag_name) }}">Next &rarr;</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

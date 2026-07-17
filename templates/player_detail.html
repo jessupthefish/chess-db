@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ player.display_name }} — Chess DB{% endblock %}
+{% block content %}
+<div class="player-header">
+  <h1>
+    {{ player.title ~ ' ' if player.title }}{{ player.display_name }}
+    {% if player.is_self %}<span class="badge self">you</span>{% endif %}
+    {% if player.is_friend %}<span class="badge friend">friend</span>{% endif %}
+  </h1>
+  <div class="player-meta">
+    {% if player.country %}<span>{{ player.country }}</span>{% endif %}
+    {% for ident in player.identities %}
+    <span class="source-badge {{ ident.source }}">{{ ident.source }}: {{ ident.username }}</span>
+    {% endfor %}
+  </div>
+  {% if not player.is_self %}
+  <form method="post" action="{{ url_for('toggle_friend', player_id=player.player_id) }}" class="inline-form">
+    <button type="submit">{{ 'Remove friend' if player.is_friend else 'Add as friend' }}</button>
+  </form>
+  {% endif %}
+
+  <div class="tags-section">
+    <div id="player-tags" class="tag-chips">
+      {% for tag in player.tags %}
+      <span class="tag-chip" style="--tag-color: {{ tag.color }}" data-id="{{ tag.tag_id }}">
+        {{ tag.name }} <button onclick="togglePlayerTag({{ tag.tag_id }})">&times;</button>
+      </span>
+      {% endfor %}
+    </div>
+    <div class="tag-add">
+      <select id="player-tag-select">
+        <option value="">Add tag…</option>
+        {% for tag in all_tags %}
+        <option value="{{ tag.tag_id }}">{{ tag.name }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" id="new-player-tag-name" placeholder="or create new…" size="12">
+      <button onclick="addPlayerTag()">+</button>
+    </div>
+  </div>
+</div>
+
+<div class="stats-row">
+  <div class="stat-card">
+    <h3>Record</h3>
+    <p class="stat-big">{{ record.wins }}–{{ record.losses }}–{{ record.draws }}</p>
+    <p class="stat-sub">{{ record.total }} games</p>
+  </div>
+
+  {% if head_to_head %}
+  <div class="stat-card">
+    <h3>Vs. you</h3>
+    <p class="stat-big">{{ head_to_head.wins }}–{{ head_to_head.losses }}–{{ head_to_head.draws }}</p>
+    <p class="stat-sub">{{ head_to_head.total }} games head-to-head</p>
+  </div>
+  {% endif %}
+
+  {% if by_time_class %}
+  <div class="stat-card">
+    <h3>By time control</h3>
+    {% for tc, n in by_time_class %}
+    <p class="stat-line"><span>{{ (tc or 'unknown')|capitalize }}</span><span>{{ n }}</span></p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if top_openings %}
+  <div class="stat-card">
+    <h3>Top openings</h3>
+    {% for opening_id, eco, name, total, wins, losses, draws in top_openings %}
+    <a class="stat-line stat-line-link" href="{{ url_for('games_list', player=player.display_name, opening_id=opening_id) }}">
+      <span>{{ eco or '' }} {{ (name or 'Unknown')[:28] }}</span><span>{{ total }} ({{ wins }}–{{ losses }}–{{ draws }})</span>
+    </a>
+    {% endfor %}
+    <a class="stat-more" href="{{ url_for('player_openings', player_id=player.player_id) }}">See full breakdown &rarr;</a>
+  </div>
+  {% endif %}
+</div>
+
+<h2>Recent games ({{ games|length }})</h2>
+<table class="game-table">
+  <thead>
+    <tr><th>Date</th><th>White</th><th>Black</th><th>Result</th><th>Opening</th><th>Time</th></tr>
+  </thead>
+  <tbody>
+    {% for g in games %}
+    <tr onclick="location.href='{{ url_for('game_detail', game_id=g.game_id) }}'" class="clickable">
+      <td class="date">{{ g.played_at.strftime('%Y-%m-%d') if g.played_at else '—' }}</td>
+      <td>{{ g.white.display_name }} <span class="rating">{{ g.white_rating or '' }}</span></td>
+      <td>{{ g.black.display_name }} <span class="rating">{{ g.black_rating or '' }}</span></td>
+      <td class="result">{{ g.result }}</td>
+      <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
+      <td>{{ g.time_class or '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function togglePlayerTag(tagId) {
+  const resp = await fetch('/api/players/{{ player.player_id }}/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_id: tagId }),
+  });
+  if (resp.ok) location.reload();
+}
+
+async function addPlayerTag() {
+  const select = document.getElementById('player-tag-select');
+  const nameInput = document.getElementById('new-player-tag-name');
+
+  if (select.value) {
+    await togglePlayerTag(parseInt(select.value));
+    return;
+  }
+
+  const name = nameInput.value.trim();
+  if (!name) return;
+
+  const createResp = await fetch('/api/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!createResp.ok) return;
+  const tag = await createResp.json();
+  await togglePlayerTag(tag.tag_id);
+}
+</script>
+{% endblock %}

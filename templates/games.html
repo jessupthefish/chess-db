@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Games — Chess DB{% endblock %}
+
+{% block content %}
+<h1>Games</h1>
+
+{% if opening_filter %}
+<p class="active-filter-pill">
+  Filtered by opening: <strong>{{ opening_filter.eco or '' }} {{ opening_filter.name or 'Unknown' }}</strong>
+  <a href="{{ url_for('games_list', **filters_without_opening) }}">&times; clear</a>
+</p>
+{% endif %}
+
+<form class="filters" method="get" action="{{ url_for('games_list') }}">
+  <input type="text" name="player" placeholder="Player name…" value="{{ filters.get('player', '') }}">
+  <input type="text" name="opening" placeholder="Opening…" value="{{ filters.get('opening', '') }}">
+  <select name="time_class">
+    <option value="">All time controls</option>
+    {% for tc in time_classes %}
+    <option value="{{ tc }}" {{ 'selected' if filters.get('time_class') == tc }}>{{ tc|capitalize }}</option>
+    {% endfor %}
+  </select>
+  <select name="result">
+    <option value="">All results</option>
+    <option value="1-0" {{ 'selected' if filters.get('result') == '1-0' }}>1-0</option>
+    <option value="0-1" {{ 'selected' if filters.get('result') == '0-1' }}>0-1</option>
+    <option value="1/2-1/2" {{ 'selected' if filters.get('result') == '1/2-1/2' }}>½-½</option>
+  </select>
+  <select name="tag">
+    <option value="">All tags</option>
+    {% for tag in tags %}
+    <option value="{{ tag.name }}" {{ 'selected' if filters.get('tag') == tag.name }}>{{ tag.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="source">
+    <option value="">All sources</option>
+    <option value="chesscom" {{ 'selected' if filters.get('source') == 'chesscom' }}>Chess.com</option>
+    <option value="lichess" {{ 'selected' if filters.get('source') == 'lichess' }}>Lichess</option>
+  </select>
+  <button type="submit">Filter</button>
+  {% if filters|length > 0 %}
+  <a href="{{ url_for('games_list') }}" class="btn-link">Clear</a>
+  {% endif %}
+</form>
+
+{% if games %}
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>White</th>
+      <th>Black</th>
+      <th>Result</th>
+      <th>Opening</th>
+      <th>Time</th>
+      <th>Moves</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in games %}
+    <tr onclick="location.href='{{ url_for('game_detail', game_id=g.game_id) }}'" class="clickable">
+      <td class="date">{{ g.played_at.strftime('%Y-%m-%d') if g.played_at else '—' }}</td>
+      <td>
+        {% if g.white.is_self %}<strong>{% endif %}
+        {{ g.white.title ~ ' ' if g.white.title }}{{ g.white.display_name }}
+        <span class="rating">{{ g.white_rating or '' }}</span>
+        {% if g.white.is_self %}</strong>{% endif %}
+      </td>
+      <td>
+        {% if g.black.is_self %}<strong>{% endif %}
+        {{ g.black.title ~ ' ' if g.black.title }}{{ g.black.display_name }}
+        <span class="rating">{{ g.black_rating or '' }}</span>
+        {% if g.black.is_self %}</strong>{% endif %}
+      </td>
+      <td class="result">{{ g.result }}</td>
+      <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
+      <td>{{ g.time_class or '' }}</td>
+      <td>{{ (g.ply_count // 2) if g.ply_count else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('games_list', page=pagination.prev_num, **filters) }}">&larr; Prev</a>
+  {% endif %}
+  <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
+  {% if pagination.has_next %}
+  <a href="{{ url_for('games_list', page=pagination.next_num, **filters) }}">Next &rarr;</a>
+  {% endif %}
+</div>
+{% else %}
+<p class="empty">No games found. <a href="{{ url_for('sync_page') }}">Sync some games</a> to get started.</p>
+{% endif %}
+{% endblock %}

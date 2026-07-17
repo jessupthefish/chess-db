@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Chess DB{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessground@9.1.1/assets/chessground.base.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessground@9.1.1/assets/chessground.brown.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessground@9.1.1/assets/chessground.cburnett.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <nav class="nav">
+    <a href="{{ url_for('games_list') }}" class="nav-brand">♟ Chess DB</a>
+    <div class="nav-links">
+      <a href="{{ url_for('games_list') }}" {% if request.endpoint == 'games_list' %}class="active"{% endif %}>Games</a>
+      <a href="{{ url_for('players_list') }}" {% if request.endpoint == 'players_list' %}class="active"{% endif %}>Players</a>
+      <a href="{{ url_for('collections_list') }}" {% if request.endpoint == 'collections_list' %}class="active"{% endif %}>Collections</a>
+      <a href="{{ url_for('sync_page') }}" {% if request.endpoint == 'sync_page' %}class="active"{% endif %}>Sync</a>
+    </div>
+  </nav>
+
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+      <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ player.display_name }} — Openings — Chess DB{% endblock %}
+{% block content %}
+<h1>
+  <a href="{{ url_for('player_detail', player_id=player.player_id) }}">{{ player.display_name }}</a>
+  &rsaquo; Openings
+</h1>
+<p class="count">{{ openings|length }} distinct openings. Click a column header to sort, click a row to see those games.</p>
+
+<table class="game-table" id="openings-table">
+  <thead>
+    <tr>
+      <th data-sort="text" data-key="name">Opening</th>
+      <th data-sort="num" data-key="total">Games</th>
+      <th data-sort="num" data-key="wins">Wins</th>
+      <th data-sort="num" data-key="losses">Losses</th>
+      <th data-sort="num" data-key="draws">Draws</th>
+      <th data-sort="num" data-key="winrate">Win %</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for opening_id, eco, name, total, wins, losses, draws in openings %}
+    {% set decisive = wins + losses %}
+    {% set winrate = ((wins / decisive * 100) if decisive else 0) %}
+    <tr
+      class="clickable"
+      onclick="location.href='{{ url_for('games_list', player=player.display_name, opening_id=opening_id) }}'"
+      data-name="{{ eco or '' }} {{ name or 'Unknown' }}"
+      data-total="{{ total }}"
+      data-wins="{{ wins }}"
+      data-losses="{{ losses }}"
+      data-draws="{{ draws }}"
+      data-winrate="{{ '%.1f'|format(winrate) }}"
+    >
+      <td>{{ eco or '' }} {{ name or 'Unknown' }}</td>
+      <td>{{ total }}</td>
+      <td>{{ wins }}</td>
+      <td>{{ losses }}</td>
+      <td>{{ draws }}</td>
+      <td>{{ '%.1f'|format(winrate) }}%{% if decisive == 0 %} <span class="count">(no decisive games)</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not openings %}
+<p class="empty">No games with a recorded opening yet.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const table = document.getElementById('openings-table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  let sortState = {};
+
+  table.querySelectorAll('th[data-key]').forEach((th) => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const key = th.dataset.key;
+      const type = th.dataset.sort;
+      const asc = !(sortState[key] === 'asc');
+      sortState = { [key]: asc ? 'asc' : 'desc' };
+
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort((a, b) => {
+        let av = a.dataset[key], bv = b.dataset[key];
+        if (type === 'num') { av = parseFloat(av); bv = parseFloat(bv); }
+        if (av < bv) return asc ? -1 : 1;
+        if (av > bv) return asc ? 1 : -1;
+        return 0;
+      });
+      rows.forEach((r) => tbody.appendChild(r));
+    });
+  });
+})();
+</script>
+{% endblock %}
