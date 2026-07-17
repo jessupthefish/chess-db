@@ -9,3 +9,4 @@ class Config:
         "DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'chess.db')}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")

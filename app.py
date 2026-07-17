@@ -6,17 +6,22 @@ CLI:  flask sync-chesscom <username>
       flask mark-self <chesscom_username>
 """
 
+import threading
 from datetime import datetime, timezone
 
 import click
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import and_, case, func
+from sqlalchemy import and_, case, event, func
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from config import Config
 from models import (
     Collection,
     Event,
     Game,
+    GameAnalysis,
+    MoveEval,
     Opening,
     Player,
     PlayerIdentity,
@@ -94,6 +99,104 @@ def _opening_breakdown(player_id, limit=None):
     return q.all()
 
 
+def _self_player():
+    return Player.query.filter_by(is_self=True).first()
+
+
+def _recent_games(player_ids=None, limit=15):
+    q = Game.query.order_by(Game.played_at.desc())
+    if player_ids:
+        q = q.filter((Game.white_id.in_(player_ids)) | (Game.black_id.in_(player_ids)))
+    return q.limit(limit).all()
+
+
+def _sparkline_svg(points, width=220, height=56, pad=8):
+    """Render a compact single-series trend sparkline as inline SVG.
+
+    points: list of (label, value) in chronological order. Uses CSS custom
+    properties (var(--accent), var(--bg2), var(--text2)) so it themes with the
+    page's existing dark/light mode automatically. 2px line, >=8px end-marker
+    with a surface-color ring, direct end-label — no gridlines/legend, this is
+    a compact stat-card sparkline, not a full chart (per the dataviz skill).
+    """
+    if len(points) < 2:
+        return ""
+    values = [v for _, v in points]
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        lo, hi = lo - 1, hi + 1
+
+    def x_at(i):
+        return pad + i / (len(points) - 1) * (width - 2 * pad)
+
+    def y_at(v):
+        return height - pad - (v - lo) / (hi - lo) * (height - 2 * pad)
+
+    coords = [(x_at(i), y_at(v)) for i, (_, v) in enumerate(points)]
+    poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    last_x, last_y = coords[-1]
+    last_label, last_value = points[-1]
+
+    return f'''<svg viewBox="0 0 {width} {height}" class="sparkline" role="img" aria-label="Rating trend, currently {last_value}">
+  <polyline points="{poly}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+  <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="6" fill="var(--bg2)" />
+  <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="4" fill="var(--accent)">
+    <title>{last_label}: {last_value}</title>
+  </circle>
+  <text x="{min(last_x + 8, width - 4)}" y="{last_y + 4:.1f}" text-anchor="{'end' if last_x + 8 > width - 30 else 'start'}" class="sparkline-label">{last_value}</text>
+</svg>'''
+
+
+def _rating_trend(player_id, limit=200):
+    """Chronological (rating, played_at) points per time_class for a player.
+
+    Returns {time_class: [(played_at, rating), ...]}. Ratings from different time
+    classes (bullet ~1500, rapid ~1800) must never be plotted on one merged line.
+    """
+    rating_case = case(
+        (Game.white_id == player_id, Game.white_rating),
+        else_=Game.black_rating,
+    )
+    rows = (
+        db.session.query(Game.played_at, Game.time_class, rating_case.label("rating"))
+        .filter((Game.white_id == player_id) | (Game.black_id == player_id))
+        .filter(rating_case.isnot(None))
+        .filter(Game.played_at.isnot(None))
+        .order_by(Game.played_at.desc())
+        .limit(limit)
+        .all()
+    )
+    by_class = {}
+    for played_at, time_class, rating in reversed(rows):
+        by_class.setdefault(time_class or "unknown", []).append((played_at, rating))
+    return by_class
+
+
+def _pro_games_query():
+    """Games where either player has the 'pro' tag, or the game is a tournament
+    broadcast — the two ingestion paths that feed the unified /pros feed."""
+    from pro_accounts import PRO_TAG_NAME
+
+    pro_tag = Tag.query.filter_by(name=PRO_TAG_NAME).first()
+    if not pro_tag:
+        return Game.query.filter(Game.source == "broadcast")
+    return Game.query.filter(
+        Game.white.has(Player.tags.any(Tag.tag_id == pro_tag.tag_id))
+        | Game.black.has(Player.tags.any(Tag.tag_id == pro_tag.tag_id))
+        | (Game.source == "broadcast")
+    )
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_wal(dbapi_connection, connection_record):
+    # WAL lets a background analysis thread commit per-ply progress without
+    # locking out normal request traffic (default rollback-journal mode
+    # takes a whole-DB lock per writer).
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -101,12 +204,57 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        # Self-heal: a deploy restart (systemctl restart) kills any in-flight
+        # background analysis thread, leaving its GameAnalysis row stuck at
+        # analyzed_at=NULL forever (the kickoff route treats an existing NULL
+        # row as "already running" and refuses to restart it). Clear these on
+        # boot so the game becomes analyzable again.
+        stuck = GameAnalysis.query.filter_by(analyzed_at=None).all()
+        for row in stuck:
+            MoveEval.query.filter_by(game_id=row.game_id).delete()
+            db.session.delete(row)
+        if stuck:
+            db.session.commit()
 
     # ── routes ───────────────────────────────────────────────────────────
 
     @app.route("/")
-    def index():
-        return redirect(url_for("games_list"))
+    def dashboard():
+        self_player = _self_player()
+        if not self_player:
+            return redirect(url_for("games_list"))
+
+        record = _player_record(self_player.player_id)
+        recent_games = _recent_games(player_ids=[self_player.player_id], limit=10)
+        top_openings = _opening_breakdown(self_player.player_id, limit=5)
+
+        trend = _rating_trend(self_player.player_id, limit=200)
+        sparklines = {}
+        for time_class, points in trend.items():
+            date_value_pairs = [
+                (played_at.strftime("%Y-%m-%d") if played_at else "?", rating)
+                for played_at, rating in points
+            ]
+            svg = _sparkline_svg(date_value_pairs)
+            if svg:
+                sparklines[time_class] = {"svg": svg, "current": points[-1][1]}
+
+        friend_count = Player.query.filter_by(is_friend=True).count()
+        total_games = Game.query.count()
+
+        recent_pro_games = _pro_games_query().order_by(Game.played_at.desc()).limit(5).all()
+
+        return render_template(
+            "dashboard.html",
+            self_player=self_player,
+            record=record,
+            recent_games=recent_games,
+            top_openings=top_openings,
+            sparklines=sparklines,
+            friend_count=friend_count,
+            total_games=total_games,
+            recent_pro_games=recent_pro_games,
+        )
 
     # ── games ────────────────────────────────────────────────────────────
 
@@ -182,6 +330,86 @@ def create_app():
         db.session.commit()
         flash("Notes saved.")
         return redirect(url_for("game_detail", game_id=game_id))
+
+    # ── on-demand analysis ──────────────────────────────────────────────────
+
+    @app.route("/games/<int:game_id>/analyze", methods=["POST"])
+    def analyze_game(game_id):
+        Game.query.get_or_404(game_id)
+        existing = GameAnalysis.query.get(game_id)
+        if existing:
+            return jsonify(status="done" if existing.analyzed_at else "in_progress")
+
+        row = GameAnalysis(game_id=game_id)
+        db.session.add(row)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # Lost a race to a concurrent double-click — someone else's insert won.
+            db.session.rollback()
+            return jsonify(status="in_progress")
+
+        import analysis
+        threading.Thread(target=analysis.run_full_analysis, args=(app, game_id), daemon=True).start()
+        return jsonify(status="started"), 202
+
+    @app.route("/games/<int:game_id>/analysis")
+    def game_analysis_status(game_id):
+        row = GameAnalysis.query.get(game_id)
+        if not row:
+            return jsonify(status="not_started")
+        if row.error:
+            return jsonify(status="error", error=row.error)
+        if row.analyzed_at is None:
+            return jsonify(status="in_progress", plies_done=row.plies_done, ply_total=row.ply_total)
+        moves = MoveEval.query.filter_by(game_id=game_id).order_by(MoveEval.ply).all()
+        return jsonify(
+            status="done",
+            white_acpl=row.white_acpl,
+            black_acpl=row.black_acpl,
+            moves=[
+                {
+                    "ply": m.ply,
+                    "score_cp": m.score_cp,
+                    "mate_in": m.mate_in,
+                    "best_move_san": m.best_move_san,
+                    "classification": m.classification,
+                }
+                for m in moves
+            ],
+        )
+
+    @app.route("/api/analyze-position", methods=["POST"])
+    def analyze_position_route():
+        fen = request.json.get("fen")
+        game_id = request.json.get("game_id")
+        ply = request.json.get("ply")
+        if not fen:
+            return jsonify(error="fen required"), 400
+
+        if game_id is not None and ply is not None:
+            game_analysis = GameAnalysis.query.get(game_id)
+            if game_analysis and game_analysis.analyzed_at:
+                cached = MoveEval.query.filter_by(game_id=game_id, ply=ply).first()
+                if cached:
+                    return jsonify(
+                        cached=True,
+                        score_cp=cached.score_cp,
+                        mate_in=cached.mate_in,
+                        best_move_san=cached.best_move_san,
+                    )
+
+        import analysis
+        try:
+            result = analysis.analyze_position(fen, app.config["STOCKFISH_PATH"])
+        except ValueError:
+            return jsonify(error="invalid fen"), 400
+        return jsonify(
+            cached=False,
+            score_cp=result["score_cp"],
+            mate_in=result["mate_in"],
+            best_move_san=result["best_san"],
+        )
 
     # ── tags ─────────────────────────────────────────────────────────────
 
@@ -350,7 +578,7 @@ def create_app():
         top_openings = _opening_breakdown(player_id, limit=8)
 
         head_to_head = None
-        self_player = Player.query.filter_by(is_self=True).first()
+        self_player = _self_player()
         if self_player and self_player.player_id != player_id:
             h2h_record = _player_record(self_player.player_id, opponent_id=player_id)
             if h2h_record["total"] > 0:
@@ -381,6 +609,15 @@ def create_app():
         player.is_friend = not player.is_friend
         db.session.commit()
         return redirect(url_for("player_detail", player_id=player_id))
+
+    # ── pro games ────────────────────────────────────────────────────────
+
+    @app.route("/pros")
+    def pro_games():
+        page = request.args.get("page", 1, type=int)
+        q = _pro_games_query()
+        pagination = q.order_by(Game.played_at.desc()).paginate(page=page, per_page=50, error_out=False)
+        return render_template("pro_games.html", games=pagination.items, pagination=pagination)
 
     # ── sync ─────────────────────────────────────────────────────────────
 
@@ -449,6 +686,44 @@ def create_app():
         for u in usernames:
             result = sync_user(u)
             click.echo(f"{u}: {result}")
+
+    @app.cli.command("sync-pros")
+    def cli_sync_pros():
+        """Sync the curated pro/streamer accounts (pro_accounts.py) and tag them 'pro'."""
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        import importlib
+
+        from pro_accounts import PRO_ACCOUNTS, PRO_TAG_NAME
+
+        pro_tag = Tag.query.filter_by(name=PRO_TAG_NAME).first()
+        if not pro_tag:
+            pro_tag = Tag(name=PRO_TAG_NAME, color="#f59e0b")
+            db.session.add(pro_tag)
+            db.session.commit()
+
+        for acct in PRO_ACCOUNTS:
+            mod = importlib.import_module(f"sync.{acct['source']}")
+            # Recent games only — pros often have years of blitz/bullet history
+            # on-platform, and this feed only wants "recent", not a full backfill.
+            kwargs = {"max_archives": 2} if acct["source"] == "chesscom" else {}
+            result = mod.sync_user(acct["username"], **kwargs)
+            if "player_id" in result:
+                player = Player.query.get(result["player_id"])
+                if pro_tag not in player.tags:
+                    player.tags.append(pro_tag)
+                    db.session.commit()
+            click.echo(f"{acct['username']}: {result}")
+
+    @app.cli.command("sync-broadcasts")
+    def cli_sync_broadcasts():
+        """Sync the curated major-tournament broadcasts (broadcast_tournaments.py)."""
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        from sync.broadcasts import sync_all
+
+        for result in sync_all():
+            click.echo(result)
 
     @app.cli.command("mark-self")
     @click.argument("username")

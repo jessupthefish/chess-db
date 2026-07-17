@@ -70,6 +70,7 @@ a:hover { text-decoration: underline; }
 
 h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1rem; }
 h2 { font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
+h2 .section-link { font-size: 0.78rem; font-weight: 500; margin-left: 0.6rem; }
 h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.5rem; }
 
 /* ── flash messages ───────────────────────────────────────────────── */
@@ -215,6 +216,44 @@ textarea { width: 100%; resize: vertical; }
   justify-content: center;
   padding: 0;
 }
+#btn-analyze {
+  width: auto;
+  padding: 0 0.75rem;
+  font-size: 0.85rem;
+  gap: 0.3rem;
+}
+#btn-analyze:disabled { opacity: 0.6; cursor: default; }
+
+.analysis-panel {
+  margin-top: 0.5rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text2);
+}
+.analysis-acpl { font-weight: 500; color: var(--text); }
+
+.suggest-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text2);
+  cursor: pointer;
+  justify-content: center;
+}
+.eval-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+.eval-score { font-weight: 700; color: var(--accent); }
+.eval-best { color: var(--text2); }
+.eval-loading { color: var(--text2); }
 
 .side-col {
   display: flex;
@@ -257,6 +296,12 @@ textarea { width: 100%; resize: vertical; }
 .move-list .move:hover { background: var(--bg3); }
 .move-list .move.active {
   background: var(--accent2);
+  color: #fff;
+}
+.move-list .move.blunder { color: var(--red); font-weight: 600; }
+.move-list .move.mistake { color: #e5a13a; font-weight: 600; }
+.move-list .move.inaccuracy { color: #d8c250; }
+.move-list .move.blunder.active, .move-list .move.mistake.active, .move-list .move.inaccuracy.active {
   color: #fff;
 }
 
@@ -361,6 +406,13 @@ a.stat-line-link:hover span:first-child { text-decoration: underline; color: var
   margin-top: 0.5rem;
   font-size: 0.8rem;
   color: var(--accent);
+}
+
+.sparkline { width: 100%; height: auto; display: block; margin: 0.25rem 0; }
+.sparkline-label {
+  font-size: 9px;
+  fill: var(--text2);
+  font-family: var(--font);
 }
 
 .active-filter-pill {

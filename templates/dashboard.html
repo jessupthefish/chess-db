@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Chess DB{% endblock %}
+{% block content %}
+<h1>Welcome back{{ ', ' ~ self_player.display_name if self_player.display_name != 'nomadchessty' else '' }}</h1>
+
+<div class="stats-row">
+  <div class="stat-card">
+    <h3>Your record</h3>
+    <p class="stat-big">{{ record.wins }}–{{ record.losses }}–{{ record.draws }}</p>
+    <p class="stat-sub">{{ record.total }} games</p>
+  </div>
+
+  <div class="stat-card">
+    <h3>Library</h3>
+    <p class="stat-big">{{ total_games }}</p>
+    <p class="stat-sub">total games, {{ friend_count }} friend{{ 's' if friend_count != 1 }} tracked</p>
+  </div>
+
+  {% if top_openings %}
+  <div class="stat-card">
+    <h3>Top openings</h3>
+    {% for opening_id, eco, name, total, wins, losses, draws in top_openings %}
+    <a class="stat-line stat-line-link" href="{{ url_for('games_list', player=self_player.display_name, opening_id=opening_id) }}">
+      <span>{{ eco or '' }} {{ (name or 'Unknown')[:24] }}</span><span>{{ total }}</span>
+    </a>
+    {% endfor %}
+    <a class="stat-more" href="{{ url_for('player_openings', player_id=self_player.player_id) }}">See full breakdown &rarr;</a>
+  </div>
+  {% endif %}
+
+  <div class="stat-card">
+    <h3>Quick actions</h3>
+    <p class="stat-line"><a href="{{ url_for('sync_page') }}">Sync new games &rarr;</a></p>
+    <p class="stat-line"><a href="{{ url_for('games_list') }}">Browse all games &rarr;</a></p>
+    <p class="stat-line"><a href="{{ url_for('players_list') }}">View players &rarr;</a></p>
+    <p class="stat-line"><a href="{{ url_for('pro_games') }}">Watch pro games &rarr;</a></p>
+  </div>
+</div>
+
+{% if sparklines %}
+<h2>Rating trend</h2>
+<div class="stats-row">
+  {% for time_class, data in sparklines.items() %}
+  <div class="stat-card">
+    <h3>{{ time_class|capitalize }}</h3>
+    {{ data.svg|safe }}
+    <p class="stat-sub">current: {{ data.current }}</p>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2>Recent games</h2>
+{% if recent_games %}
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>White</th>
+      <th>Black</th>
+      <th>Result</th>
+      <th>Opening</th>
+      <th>Time</th>
+      <th>Moves</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in recent_games %}
+    {% include "_game_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No games yet. <a href="{{ url_for('sync_page') }}">Sync your games</a> to get started.</p>
+{% endif %}
+
+{% if recent_pro_games %}
+<h2>Recent pro games <a class="stat-more section-link" href="{{ url_for('pro_games') }}">See all &rarr;</a></h2>
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>White</th>
+      <th>Black</th>
+      <th>Result</th>
+      <th>Opening</th>
+      <th>Time</th>
+      <th>Moves</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in recent_pro_games %}
+    {% include "_game_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

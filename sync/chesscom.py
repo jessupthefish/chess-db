@@ -241,8 +241,13 @@ def _sync_archive(archive_url: str) -> tuple[int, int]:
 
 # ── Top-level sync ───────────────────────────────────────────────────────
 
-def sync_user(username: str) -> dict:
-    """Sync a chess.com user. Returns stats dict."""
+def sync_user(username: str, max_archives: int | None = None) -> dict:
+    """Sync a chess.com user. Returns stats dict.
+
+    max_archives: if set, only sync the most recent N monthly archives instead
+    of full history — for prolific accounts (e.g. the curated pro-players feed,
+    which only wants "recent games", not a decade of blitz/bullet history).
+    """
     log.info("syncing chess.com/%s", username)
 
     resp = _fetch(f"{API_BASE}/player/{username}")
@@ -255,6 +260,8 @@ def sync_user(username: str) -> dict:
 
     archives_resp = _fetch(f"{API_BASE}/player/{username}/games/archives")
     archive_urls = (archives_resp.json() if archives_resp else {}).get("archives", [])
+    if max_archives:
+        archive_urls = archive_urls[-max_archives:]
     log.info("%s: %d monthly archives", username, len(archive_urls))
 
     total_games = 0

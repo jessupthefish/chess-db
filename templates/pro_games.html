@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Pro Games — Chess DB{% endblock %}
+{% block content %}
+<h1>Pro Games</h1>
+<p class="count">Recent games from top titled players' chess.com/Lichess accounts and major tournament broadcasts.</p>
+
+{% if games %}
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>White</th>
+      <th>Black</th>
+      <th>Result</th>
+      <th>Opening</th>
+      <th>Time</th>
+      <th>Moves</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in games %}
+    {% include "_game_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('pro_games', page=pagination.prev_num) }}">&larr; Prev</a>
+  {% endif %}
+  <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
+  {% if pagination.has_next %}
+  <a href="{{ url_for('pro_games', page=pagination.next_num) }}">Next &rarr;</a>
+  {% endif %}
+</div>
+{% else %}
+<p class="empty">No pro games synced yet. Run <code>flask sync-pros</code> to get started.</p>
+{% endif %}
+{% endblock %}

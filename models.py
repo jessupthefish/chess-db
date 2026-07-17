@@ -146,3 +146,40 @@ class ArchiveCache(db.Model):
     etag = db.Column(db.String(200))
     last_modified = db.Column(db.String(200))
     fetched_at = db.Column(db.Integer)
+
+
+# ── on-demand engine analysis ────────────────────────────────────────────
+# No job queue — analysis is user-triggered per game, run in a background
+# thread, not a batch worker pool. analyzed_at IS NULL is the sole
+# "in progress" signal (see app.py's startup self-heal hook, which clears
+# any row stuck NULL after an unclean restart).
+
+class GameAnalysis(db.Model):
+    __tablename__ = "game_analysis"
+
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), primary_key=True)
+    engine = db.Column(db.String(50), default="stockfish")
+    engine_options = db.Column(db.String(100))
+    plies_done = db.Column(db.Integer, default=0)
+    ply_total = db.Column(db.Integer)
+    analyzed_at = db.Column(db.DateTime)
+    white_acpl = db.Column(db.Float)
+    black_acpl = db.Column(db.Float)
+    error = db.Column(db.String(500))
+
+    game = db.relationship("Game", backref=db.backref("analysis", uselist=False))
+
+
+class MoveEval(db.Model):
+    __tablename__ = "move_eval"
+
+    move_eval_id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), nullable=False, index=True)
+    ply = db.Column(db.Integer, nullable=False)
+    score_cp = db.Column(db.Integer)
+    mate_in = db.Column(db.Integer)
+    best_move_uci = db.Column(db.String(10))
+    best_move_san = db.Column(db.String(10))
+    classification = db.Column(db.String(20))
+
+    __table_args__ = (db.UniqueConstraint("game_id", "ply", name="uq_move_eval_game_ply"),)

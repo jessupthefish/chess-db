@@ -58,25 +58,7 @@
   </thead>
   <tbody>
     {% for g in games %}
-    <tr onclick="location.href='{{ url_for('game_detail', game_id=g.game_id) }}'" class="clickable">
-      <td class="date">{{ g.played_at.strftime('%Y-%m-%d') if g.played_at else '—' }}</td>
-      <td>
-        {% if g.white.is_self %}<strong>{% endif %}
-        {{ g.white.title ~ ' ' if g.white.title }}{{ g.white.display_name }}
-        <span class="rating">{{ g.white_rating or '' }}</span>
-        {% if g.white.is_self %}</strong>{% endif %}
-      </td>
-      <td>
-        {% if g.black.is_self %}<strong>{% endif %}
-        {{ g.black.title ~ ' ' if g.black.title }}{{ g.black.display_name }}
-        <span class="rating">{{ g.black_rating or '' }}</span>
-        {% if g.black.is_self %}</strong>{% endif %}
-      </td>
-      <td class="result">{{ g.result }}</td>
-      <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
-      <td>{{ g.time_class or '' }}</td>
-      <td>{{ (g.ply_count // 2) if g.ply_count else '—' }}</td>
-    </tr>
+    {% include "_game_row.html" %}
     {% endfor %}
   </tbody>
 </table>
