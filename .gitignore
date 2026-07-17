@@ -3,6 +3,5 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
-chess.db
-chess.db-journal
+chess.db*
 .bin/

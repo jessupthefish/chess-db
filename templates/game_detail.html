@@ -29,6 +29,21 @@
       <button id="btn-next" title="Next move">▶</button>
       <button id="btn-end" title="Go to end">⏭</button>
       <button id="btn-flip" title="Flip board">🔄</button>
+      <button id="btn-analyze" title="Analyze this game with Stockfish">🔬 Analyze</button>
+    </div>
+    <div id="analysis-panel" class="analysis-panel" style="display: none;">
+      <p id="analysis-status" class="analysis-status"></p>
+      <p id="analysis-acpl" class="analysis-acpl" style="display: none;"></p>
+    </div>
+
+    <label class="suggest-toggle">
+      <input type="checkbox" id="suggest-toggle">
+      Live move suggestion
+    </label>
+    <div id="eval-panel" class="eval-panel" style="display: none;">
+      <span id="eval-score" class="eval-score"></span>
+      <span id="eval-best" class="eval-best"></span>
+      <span id="eval-loading" class="eval-loading" style="display: none;">…</span>
     </div>
   </div>
 
@@ -115,7 +130,62 @@ function goTo(idx) {
   // Scroll active move into view
   const active = document.querySelector('.move-list .move.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
+  maybeSuggest(idx);
 }
+
+// ── Live move suggestion ─────────────────────────────────────────────────
+
+const suggestToggle = document.getElementById('suggest-toggle');
+const evalPanel = document.getElementById('eval-panel');
+const evalScoreEl = document.getElementById('eval-score');
+const evalBestEl = document.getElementById('eval-best');
+const evalLoadingEl = document.getElementById('eval-loading');
+let suggestAbort = null;
+
+function formatScore(data) {
+  if (data.mate_in != null) return `M${Math.abs(data.mate_in)}`;
+  if (data.score_cp == null) return '—';
+  const pawns = (data.score_cp / 100).toFixed(1);
+  return data.score_cp > 0 ? `+${pawns}` : pawns;
+}
+
+async function maybeSuggest(idx) {
+  if (!suggestToggle.checked) return;
+  evalPanel.style.display = 'flex';
+  evalLoadingEl.style.display = 'inline';
+
+  if (suggestAbort) suggestAbort.abort();
+  suggestAbort = new AbortController();
+  const signal = suggestAbort.signal;
+
+  let resp;
+  try {
+    resp = await fetch('/api/analyze-position', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen: positions[idx].fen, game_id: {{ game.game_id }}, ply: idx }),
+      signal,
+    });
+  } catch (e) {
+    return; // aborted — a newer request is already in flight, let it win
+  }
+  if (idx !== current || !resp.ok) return; // stale or failed — keep showing the last-known eval
+  const data = await resp.json();
+  if (idx !== current) return; // re-check after await, in case navigation happened mid-parse
+
+  evalLoadingEl.style.display = 'none';
+  evalScoreEl.textContent = formatScore(data);
+  evalBestEl.textContent = data.best_move_san ? `Best: ${data.best_move_san}` : '';
+}
+
+suggestToggle.addEventListener('change', () => {
+  if (suggestToggle.checked) {
+    maybeSuggest(current);
+  } else {
+    evalPanel.style.display = 'none';
+    if (suggestAbort) suggestAbort.abort();
+  }
+});
 
 // Build move list HTML
 const moveListEl = document.getElementById('move-list');
@@ -131,6 +201,80 @@ moveListEl.addEventListener('click', (e) => {
   const move = e.target.closest('.move');
   if (move) goTo(parseInt(move.dataset.idx));
 });
+
+// ── On-demand analysis ──────────────────────────────────────────────────
+
+const analyzeBtn = document.getElementById('btn-analyze');
+const panel = document.getElementById('analysis-panel');
+const statusEl = document.getElementById('analysis-status');
+const acplEl = document.getElementById('analysis-acpl');
+let pollTimer = null;
+
+function applyAnnotations(moves) {
+  const byPly = {};
+  moves.forEach((m) => { byPly[m.ply] = m; });
+  document.querySelectorAll('.move-list .move').forEach((el) => {
+    const ply = parseInt(el.dataset.idx);
+    const m = byPly[ply];
+    el.classList.remove('blunder', 'mistake', 'inaccuracy');
+    if (m && m.classification) {
+      el.classList.add(m.classification);
+      el.title = `${m.classification} — best was ${m.best_move_san || '?'}`;
+    }
+  });
+}
+
+function renderStatus(data) {
+  panel.style.display = 'block';
+  if (data.status === 'in_progress') {
+    analyzeBtn.disabled = true;
+    const pct = data.ply_total ? Math.round((data.plies_done / data.ply_total) * 100) : 0;
+    statusEl.textContent = `Analyzing… ${data.plies_done ?? 0}/${data.ply_total ?? '?'} plies (${pct}%)`;
+    acplEl.style.display = 'none';
+  } else if (data.status === 'done') {
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = '✓ Analyzed';
+    statusEl.textContent = '';
+    if (data.white_acpl != null || data.black_acpl != null) {
+      acplEl.style.display = 'block';
+      acplEl.textContent = `ACPL — White: ${data.white_acpl != null ? data.white_acpl.toFixed(0) : '—'}, Black: ${data.black_acpl != null ? data.black_acpl.toFixed(0) : '—'}`;
+    }
+    applyAnnotations(data.moves || []);
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  } else if (data.status === 'error') {
+    statusEl.textContent = `Analysis failed: ${data.error || 'unknown error'}`;
+    analyzeBtn.disabled = false;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+}
+
+async function checkStatus() {
+  const resp = await fetch('/games/{{ game.game_id }}/analysis');
+  if (!resp.ok) return;
+  const data = await resp.json();
+  if (data.status === 'not_started') return;
+  renderStatus(data);
+  if (data.status === 'in_progress' && !pollTimer) {
+    pollTimer = setInterval(checkStatus, 1500);
+  }
+}
+
+analyzeBtn.addEventListener('click', async () => {
+  analyzeBtn.disabled = true;
+  panel.style.display = 'block';
+  statusEl.textContent = 'Starting…';
+  const resp = await fetch('/games/{{ game.game_id }}/analyze', { method: 'POST' });
+  if (!resp.ok) {
+    statusEl.textContent = 'Failed to start analysis.';
+    analyzeBtn.disabled = false;
+    return;
+  }
+  pollTimer = setInterval(checkStatus, 1500);
+  checkStatus();
+});
+
+// One status check on load, in case this game was already analyzed before.
+checkStatus();
 
 // Buttons
 document.getElementById('btn-start').addEventListener('click', () => goTo(0));
