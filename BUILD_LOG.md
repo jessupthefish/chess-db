@@ -5,7 +5,13 @@
 > file after every finished migration, route, or deploy, not just before stopping.
 > See `docs/ARCHITECTURE.md` for the static design reference (schema, routes, curated lists).
 
-## Status: Phase 0 — foundations in progress (last updated 2026-07-17 ~02:00)
+## Status: ALL PHASES COMPLETE (last updated 2026-07-17 ~03:35)
+
+All 7 phases shipped, deployed, and verified live on both Mac and spaceship:
+dashboard, on-demand Stockfish analysis (per-game + live move-suggestion),
+pro-accounts feed, tournament-broadcast feed, dashboard pro-games widget,
+final commit pushed to github.com/jessupthefish/chess-db (e5542a3). Both
+daily sync timers running on spaceship. Nothing blocked, nothing in progress.
 
 ## BLOCKED — needs user input
 (none currently)
@@ -101,7 +107,10 @@
       used by both now, no drift risk. Dashboard shows 5 most recent pro/broadcast games
       + "See all" link to /pros, plus a "Watch pro games" quick-action link. Deployed,
       verified live.
-- [ ] Phase 7 — final push to GitHub  <- NEXT
+- [x] Phase 7 — final push to GitHub: committed (e5542a3) and pushed to
+      github.com/jessupthefish/chess-db. gh auth wasn't wired into git's credential
+      helper for plain `git push` (only `gh`-invoked pushes worked) — fixed with
+      `gh auth setup-git`, then the push succeeded normally.
 - [ ] Phase 2 — on-demand single-game analysis (schema + routes + UI)
 - [ ] Phase 3 — live move-suggestion toggle
 - [ ] Phase 4 — pro personal-accounts feed
@@ -110,14 +119,10 @@
 - [ ] Phase 7 — final push to GitHub
 
 ## IN PROGRESS — exact resume point
-Phase 5 (tournament broadcast ingestion) is complete and deployed, verified live on both
-machines, both daily timers running. Starting Phase 6 (dashboard pro-games preview
-widget): add a small "recent pro games" widget to templates/dashboard.html, querying the
-same union condition /pros uses (pro tag OR source=="broadcast"), limited to ~5 games,
-linking to /pros for the full feed. Reuse _game_row.html partial. Should be a quick,
-low-risk addition — no new routes needed, just a new query in the dashboard() route
-(app.py) and a new section in dashboard.html. After this, Phase 7 (final git push) is
-the last remaining phase.
+Nothing in progress. All 7 planned phases are complete, deployed, verified live, and
+pushed to GitHub. If resuming for further work, see README.md's Roadmap section for
+natural next steps (opening repertoire explorer, FEN search, puzzle trainer, expanding
+the curated pro/broadcast lists per the methodology in docs/ARCHITECTURE.md).
 
 ## Decisions & gotchas (append-only, never delete, append the moment discovered)
 - 2026-07-17: db.create_all() doesn't ALTER existing tables — future column additions
