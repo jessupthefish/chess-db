@@ -44,6 +44,7 @@
 </form>
 
 {% if games %}
+{% set show_collect = true %}
 <table class="game-table">
   <thead>
     <tr>
@@ -54,6 +55,7 @@
       <th>Opening</th>
       <th>Time</th>
       <th>Moves</th>
+      <th></th>
     </tr>
   </thead>
   <tbody>
@@ -62,6 +64,7 @@
     {% endfor %}
   </tbody>
 </table>
+{% include "_collection_picker.html" %}
 
 <div class="pagination">
   {% if pagination.has_prev %}

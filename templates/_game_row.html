@@ -16,4 +16,8 @@
   <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
   <td>{{ g.time_class or '' }}</td>
   <td>{{ (g.ply_count // 2) if g.ply_count else '—' }}</td>
+  {% if show_collect %}
+  <td class="coll-cell"><button type="button" class="coll-open-btn coll-row-btn" title="Add to collection"
+      onclick="event.stopPropagation(); collectionPicker.open({{ g.game_id }}, this)">＋</button></td>
+  {% endif %}
 </tr>

@@ -37,31 +37,34 @@ from models import (
 )
 
 
-def _player_record(player_id, opponent_id=None):
+def _player_record(player_id, opponent_id=None, collection_id=None):
     """Aggregate win/loss/draw record for a player, optionally restricted to games
-    against one specific opponent (head-to-head). Pure SQL aggregation — avoids
-    loading full Game rows (incl. the pgn text column) just to tally results."""
+    against one specific opponent (head-to-head) or to one collection's games.
+    Pure SQL aggregation — avoids loading full Game rows (incl. the pgn text
+    column) just to tally results."""
     filters = [(Game.white_id == player_id) | (Game.black_id == player_id)]
     if opponent_id is not None:
         filters.append((Game.white_id == opponent_id) | (Game.black_id == opponent_id))
 
     win_case, loss_case, draw_case = stats.result_cases(player_id)
 
-    wins, losses, draws, total = (
-        db.session.query(
-            func.coalesce(func.sum(win_case), 0),
-            func.coalesce(func.sum(loss_case), 0),
-            func.coalesce(func.sum(draw_case), 0),
-            func.count(),
+    q = db.session.query(
+        func.coalesce(func.sum(win_case), 0),
+        func.coalesce(func.sum(loss_case), 0),
+        func.coalesce(func.sum(draw_case), 0),
+        func.count(),
+    ).select_from(Game)
+    if collection_id is not None:
+        q = q.join(collection_game, collection_game.c.game_id == Game.game_id).filter(
+            collection_game.c.collection_id == collection_id
         )
-        .filter(*filters)
-        .one()
-    )
+    wins, losses, draws, total = q.filter(*filters).one()
     return {"wins": wins, "losses": losses, "draws": draws, "total": total}
 
 
-def _opening_breakdown(player_id, limit=None):
-    """Per-opening win/loss/draw breakdown for a player, most-played first."""
+def _opening_breakdown(player_id, limit=None, collection_id=None):
+    """Per-opening win/loss/draw breakdown for a player, most-played first.
+    collection_id restricts to that collection's games."""
     win_case, loss_case, draw_case = stats.result_cases(player_id)
 
     q = (
@@ -79,6 +82,10 @@ def _opening_breakdown(player_id, limit=None):
         .group_by(Opening.opening_id)
         .order_by(func.count(Game.game_id).desc())
     )
+    if collection_id is not None:
+        q = q.join(collection_game, collection_game.c.game_id == Game.game_id).filter(
+            collection_game.c.collection_id == collection_id
+        )
     if limit:
         q = q.limit(limit)
     return q.all()
@@ -677,15 +684,93 @@ def create_app():
 
     # ── collections ──────────────────────────────────────────────────────
 
+    def _collection_summary(coll, self_player):
+        """Aggregate stats for a collection's games: totals + date range over
+        every game in it, plus self-scoped record / rating span / openings /
+        analysis summary when a self player exists. All pure SQL — never loads
+        Game rows (or their pgn text) just to aggregate."""
+        member = collection_game.c.collection_id == coll.collection_id
+        base = (
+            db.session.query(func.count(), func.min(Game.played_at), func.max(Game.played_at))
+            .select_from(Game)
+            .join(collection_game, collection_game.c.game_id == Game.game_id)
+            .filter(member)
+        )
+        total, first, last = base.one()
+        summary = {
+            "total": total,
+            "first": first,
+            "last": last,
+            "record": None,
+            "score": None,
+            "rating_lo": None,
+            "rating_hi": None,
+            "openings": [],
+            "n_analyzed": 0,
+            "avg_acpl": None,
+        }
+        if not self_player or not total:
+            return summary
+        pid = self_player.player_id
+
+        summary["record"] = _player_record(pid, collection_id=coll.collection_id)
+        r = summary["record"]
+        summary["score"] = stats.score_pct(r["wins"], r["draws"], r["total"])
+        summary["openings"] = _opening_breakdown(pid, limit=8, collection_id=coll.collection_id)
+
+        self_rating = case((Game.white_id == pid, Game.white_rating), else_=Game.black_rating)
+        lo, hi = (
+            db.session.query(func.min(self_rating), func.max(self_rating))
+            .select_from(Game)
+            .join(collection_game, collection_game.c.game_id == Game.game_id)
+            .filter(member)
+            .filter((Game.white_id == pid) | (Game.black_id == pid))
+            .one()
+        )
+        summary["rating_lo"], summary["rating_hi"] = lo, hi
+
+        self_acpl = case(
+            (Game.white_id == pid, GameAnalysis.white_acpl), else_=GameAnalysis.black_acpl
+        )
+        n_analyzed, avg_acpl = (
+            db.session.query(func.count(), func.avg(self_acpl))
+            .select_from(GameAnalysis)
+            .join(Game, Game.game_id == GameAnalysis.game_id)
+            .join(collection_game, collection_game.c.game_id == Game.game_id)
+            .filter(member)
+            .filter(GameAnalysis.analyzed_at.isnot(None))
+            .one()
+        )
+        summary["n_analyzed"] = n_analyzed
+        summary["avg_acpl"] = round(avg_acpl, 1) if avg_acpl is not None else None
+        return summary
+
     @app.route("/collections")
     def collections_list():
         colls = Collection.query.order_by(Collection.created_at.desc()).all()
-        return render_template("collections.html", collections=colls)
+        # one COUNT GROUP BY instead of len(c.games), which would load every
+        # Game row (incl. pgn text) per card
+        counts = dict(
+            db.session.query(collection_game.c.collection_id, func.count())
+            .group_by(collection_game.c.collection_id)
+            .all()
+        )
+        return render_template("collections.html", collections=colls, counts=counts)
 
     @app.route("/collections/<int:coll_id>")
     def collection_detail(coll_id):
         coll = Collection.query.get_or_404(coll_id)
-        return render_template("collection_detail.html", collection=coll)
+        page = request.args.get("page", 1, type=int)
+        games = (
+            Game.query.join(collection_game, collection_game.c.game_id == Game.game_id)
+            .filter(collection_game.c.collection_id == coll_id)
+            .order_by(Game.played_at.desc())
+            .paginate(page=page, per_page=50, error_out=False)
+        )
+        summary = _collection_summary(coll, _self_player())
+        return render_template(
+            "collection_detail.html", collection=coll, games=games, summary=summary
+        )
 
     @app.route("/collections/new", methods=["POST"])
     def create_collection():
@@ -698,6 +783,61 @@ def create_app():
         db.session.commit()
         flash(f"Created collection '{name}'.")
         return redirect(url_for("collections_list"))
+
+    @app.route("/collections/<int:coll_id>/edit", methods=["POST"])
+    def update_collection(coll_id):
+        coll = Collection.query.get_or_404(coll_id)
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Collection name required.")
+            return redirect(url_for("collection_detail", coll_id=coll_id))
+        coll.name = name
+        coll.description = request.form.get("description", "").strip()
+        db.session.commit()
+        flash("Collection updated.")
+        return redirect(url_for("collection_detail", coll_id=coll_id))
+
+    @app.route("/collections/<int:coll_id>/delete", methods=["POST"])
+    def delete_collection(coll_id):
+        coll = Collection.query.get_or_404(coll_id)
+        name = coll.name
+        db.session.delete(coll)  # SQLAlchemy clears the collection_game rows
+        db.session.commit()
+        flash(f"Deleted collection '{name}'.")
+        return redirect(url_for("collections_list"))
+
+    @app.route("/api/collections", methods=["POST"])
+    def api_create_collection():
+        """JSON create-or-get, mirroring create_tag() — used by the inline
+        'new collection…' input in the collection picker popover."""
+        name = (request.json.get("name") or "").strip()
+        if not name:
+            return jsonify(error="name required"), 400
+        existing = Collection.query.filter(func.lower(Collection.name) == name.lower()).first()
+        if existing:
+            return jsonify(collection_id=existing.collection_id, name=existing.name)
+        coll = Collection(name=name)
+        db.session.add(coll)
+        db.session.commit()
+        return jsonify(collection_id=coll.collection_id, name=coll.name), 201
+
+    @app.route("/api/games/<int:game_id>/collections")
+    def game_collections(game_id):
+        """All collections with membership flags for one game — feeds the
+        collection picker popover."""
+        game = Game.query.get_or_404(game_id)
+        member_ids = {c.collection_id for c in game.collections}
+        colls = Collection.query.order_by(Collection.name.asc()).all()
+        return jsonify(
+            collections=[
+                {
+                    "collection_id": c.collection_id,
+                    "name": c.name,
+                    "member": c.collection_id in member_ids,
+                }
+                for c in colls
+            ]
+        )
 
     @app.route("/api/games/<int:game_id>/collections", methods=["POST"])
     def toggle_game_collection(game_id):
