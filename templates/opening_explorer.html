@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Opening Explorer — Chess DB{% endblock %}
+
+{% block content %}
+{% if not node %}
+<h1>Opening Explorer</h1>
+<p class="empty">No opening tree built yet. Run <code>flask build-opening-tree</code> to get started.</p>
+{% else %}
+
+<h1>Opening Explorer</h1>
+
+<div class="scope-toggle">
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope='mine') }}"
+     class="active-filter-pill {{ 'active' if scope == 'mine' }}">Mine</a>
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope='pro') }}"
+     class="active-filter-pill {{ 'active' if scope == 'pro' }}">Pro games</a>
+  <a href="{{ url_for('opening_stats') }}" class="btn-link">Stats &amp; prep gaps &rsaquo;</a>
+</div>
+
+<div class="breadcrumb">
+  <a href="{{ url_for('opening_explorer', node_id=breadcrumb[0].node_id, scope=scope) }}"
+     class="{{ 'active' if breadcrumb[0].node_id == node.node_id }}">Start</a>
+  {% for n in breadcrumb[1:] %}
+    {% if n.ply is odd %}<span class="move-number">{{ ((n.ply + 1) // 2) }}.</span>{% endif %}
+    <a href="{{ url_for('opening_explorer', node_id=n.node_id, scope=scope) }}"
+       class="{{ 'active' if n.node_id == node.node_id }}">{{ n.move_san }}</a>
+  {% endfor %}
+</div>
+
+{% if node.opening %}
+<p class="count">{{ node.opening.eco or '' }} {{ node.opening.name or '' }}</p>
+{% endif %}
+
+<div class="game-viewer">
+  <div class="board-col">
+    <div id="board" class="board"></div>
+    <div class="board-controls">
+      <button id="btn-flip" title="Flip board">🔄</button>
+    </div>
+  </div>
+
+  <div class="side-col">
+    <h2>Next moves</h2>
+    {% if children %}
+    <table class="game-table tree-branch-table">
+      <thead>
+        <tr>
+          <th>Move</th>
+          <th>Games</th>
+          {% if scope == 'pro' %}
+          <th>White wins</th>
+          <th>Black wins</th>
+          <th>Draws</th>
+          <th>White win %</th>
+          {% else %}
+          <th>Wins</th>
+          <th>Losses</th>
+          <th>Draws</th>
+          <th>Win %</th>
+          {% endif %}
+          <th>Avg rating</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for child_id, move_san, eco, name, total, wins, losses, draws, avg_rating in children %}
+        {% set decisive = wins + losses %}
+        {% set win_rate = ((wins / decisive * 100) if decisive else 0) %}
+        <tr class="clickable tree-branch-row"
+            onclick="location.href='{{ url_for('opening_explorer', node_id=child_id, scope=scope) }}'">
+          <td>
+            <strong>{{ move_san }}</strong>
+            {% if name %}<span class="opening">{{ eco or '' }} {{ name }}</span>{% endif %}
+          </td>
+          <td>{{ total }}</td>
+          <td>{{ wins }}</td>
+          <td>{{ losses }}</td>
+          <td>{{ draws }}</td>
+          <td>{{ '%.1f'|format(win_rate) }}%{% if decisive == 0 %} <span class="count">(no decisive games)</span>{% endif %}</td>
+          <td>{{ avg_rating|round|int if avg_rating else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No {{ 'your' if scope == 'mine' else 'pro' }} games continue past this position.</p>
+    {% endif %}
+  </div>
+</div>
+
+<h2>Games reaching this position</h2>
+{% if pagination is none %}
+<p class="empty">No self player marked yet — sync and run <code>flask mark-self &lt;username&gt;</code>.</p>
+{% elif pagination.items %}
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>White</th>
+      <th>Black</th>
+      <th>Result</th>
+      <th>Opening</th>
+      <th>Time</th>
+      <th>Moves</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in pagination.items %}
+    {% include "_game_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope=scope, page=pagination.prev_num) }}">&larr; Prev</a>
+  {% endif %}
+  <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
+  {% if pagination.has_next %}
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope=scope, page=pagination.next_num) }}">Next &rarr;</a>
+  {% endif %}
+</div>
+{% else %}
+<p class="empty">No {{ 'your' if scope == 'mine' else 'pro' }} games reach this exact position.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if node %}
+<script type="module">
+import { Chessground } from 'https://esm.sh/chessground@9.1.1';
+
+const fen = {{ node.fen|tojson }};
+let orientation = 'white';
+
+const boardEl = document.getElementById('board');
+const cg = Chessground(boardEl, {
+  fen: fen,
+  orientation: orientation,
+  viewOnly: true,
+  coordinates: true,
+});
+
+document.getElementById('btn-flip').addEventListener('click', () => {
+  orientation = orientation === 'white' ? 'black' : 'white';
+  cg.set({ orientation });
+});
+</script>
+{% endif %}
+{% endblock %}

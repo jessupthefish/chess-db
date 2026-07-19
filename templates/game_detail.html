@@ -22,7 +22,15 @@
 
 <div class="game-viewer">
   <div class="board-col">
-    <div id="board" class="board"></div>
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+      <div id="promotion-picker" class="promotion-picker" style="display: none;">
+        <button type="button" data-piece="q" title="Queen">♛</button>
+        <button type="button" data-piece="r" title="Rook">♜</button>
+        <button type="button" data-piece="b" title="Bishop">♝</button>
+        <button type="button" data-piece="n" title="Knight">♞</button>
+      </div>
+    </div>
     <div class="board-controls">
       <button id="btn-start" title="Go to start">⏮</button>
       <button id="btn-prev" title="Previous move">◀</button>
@@ -30,6 +38,10 @@
       <button id="btn-end" title="Go to end">⏭</button>
       <button id="btn-flip" title="Flip board">🔄</button>
       <button id="btn-analyze" title="Analyze this game with Stockfish">🔬 Analyze</button>
+    </div>
+    <div id="exploring-bar" class="exploring-bar" style="display: none;">
+      <span>Exploring: <span id="exploring-line"></span></span>
+      <button type="button" id="btn-back-to-game">Back to game</button>
     </div>
     <div id="analysis-panel" class="analysis-panel" style="display: none;">
       <p id="analysis-status" class="analysis-status"></p>
@@ -41,8 +53,7 @@
       Live move suggestion
     </label>
     <div id="eval-panel" class="eval-panel" style="display: none;">
-      <span id="eval-score" class="eval-score"></span>
-      <span id="eval-best" class="eval-best"></span>
+      <div id="eval-lines" class="eval-lines"></div>
       <span id="eval-loading" class="eval-loading" style="display: none;">…</span>
     </div>
   </div>
@@ -92,10 +103,10 @@ const history = chess.history({ verbose: true });
 
 // Build position list
 chess.reset();
-const positions = [{ fen: chess.fen(), san: null, from: null, to: null }];
+const positions = [{ fen: chess.fen(), san: null, from: null, to: null, promotion: null }];
 for (const m of history) {
   chess.move(m);
-  positions.push({ fen: chess.fen(), san: m.san, from: m.from, to: m.to });
+  positions.push({ fen: chess.fen(), san: m.san, from: m.from, to: m.to, promotion: m.promotion || null });
 }
 
 // Init board
@@ -104,24 +115,62 @@ let orientation = 'white';
 orientation = 'black';
 {% endif %}
 
+// ── State ────────────────────────────────────────────────────────────────
+// current: main-line position index (unchanged navigation model).
+// branch: null, or { forkPly, chess, sans } — a scratch variation off the
+//   main line. Only one active branch at a time (no branch tree).
+// pendingMove: { orig, dest } while the promotion picker is open.
+// moveToken: staleness guard for async eval requests, generalizes the old
+//   `idx !== current` check to also work in branch mode (no index there).
+let current = 0;
+let branch = null;
+let pendingMove = null;
+let moveToken = 0;
+
+function activeFen() {
+  return branch ? branch.chess.fen() : positions[current].fen;
+}
+
+function computeDests(fen) {
+  const tempChess = new Chess(fen);
+  const dests = new Map();
+  for (const m of tempChess.moves({ verbose: true })) {
+    if (!dests.has(m.from)) dests.set(m.from, []);
+    dests.get(m.from).push(m.to);
+  }
+  return dests;
+}
+
 const boardEl = document.getElementById('board');
 const cg = Chessground(boardEl, {
   fen: positions[0].fen,
   orientation: orientation,
-  viewOnly: true,
   coordinates: true,
   animation: { duration: 150 },
+  movable: {
+    free: false,
+    color: 'both',
+    showDests: true,
+    dests: computeDests(positions[0].fen),
+    events: { after: onUserMove },
+  },
+  draggable: { enabled: true },
+  drawable: { enabled: true },
 });
-
-let current = 0;
 
 function goTo(idx) {
   idx = Math.max(0, Math.min(idx, positions.length - 1));
   current = idx;
+  branch = null;
+  pendingMove = null;
+  hidePromotionPicker();
+  hideExploringBar();
   const pos = positions[idx];
   cg.set({
     fen: pos.fen,
     lastMove: pos.from && pos.to ? [pos.from, pos.to] : undefined,
+    movable: { dests: computeDests(pos.fen) },
+    drawable: { autoShapes: [] },
   });
   // Update move list highlighting
   document.querySelectorAll('.move-list .move').forEach((el, i) => {
@@ -130,16 +179,122 @@ function goTo(idx) {
   // Scroll active move into view
   const active = document.querySelector('.move-list .move.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
-  maybeSuggest(idx);
+  maybeSuggest(pos.fen, idx);
+}
+
+// ── Interactive board: user moves, scratch variations, promotion ─────────
+
+function resyncBoard() {
+  const fen = activeFen();
+  cg.set({ fen, movable: { dests: computeDests(fen) } });
+}
+
+function syncBoardFromBranch() {
+  const fen = branch.chess.fen();
+  const hist = branch.chess.history({ verbose: true });
+  const last = hist[hist.length - 1];
+  cg.set({
+    fen,
+    lastMove: last ? [last.from, last.to] : undefined,
+    movable: { dests: computeDests(fen) },
+  });
+}
+
+function branchLineText() {
+  let text = '';
+  branch.sans.forEach((san, i) => {
+    const ply = branch.forkPly + i + 1; // 1-based overall ply number
+    const moveNumber = Math.floor((ply - 1) / 2) + 1;
+    const isWhite = (ply - 1) % 2 === 0;
+    if (isWhite) text += `${moveNumber}. ${san} `;
+    else if (i === 0) text += `${moveNumber}... ${san} `;
+    else text += `${san} `;
+  });
+  return text.trim();
+}
+
+const exploringBarEl = document.getElementById('exploring-bar');
+const exploringLineEl = document.getElementById('exploring-line');
+
+function showExploringBar() {
+  exploringBarEl.style.display = 'flex';
+  exploringLineEl.textContent = branchLineText();
+}
+
+function hideExploringBar() {
+  exploringBarEl.style.display = 'none';
+}
+
+document.getElementById('btn-back-to-game').addEventListener('click', () => {
+  if (branch) goTo(branch.forkPly);
+});
+
+const promotionPickerEl = document.getElementById('promotion-picker');
+
+function showPromotionPicker() {
+  promotionPickerEl.style.display = 'flex';
+}
+
+function hidePromotionPicker() {
+  promotionPickerEl.style.display = 'none';
+}
+
+promotionPickerEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-piece]');
+  if (!btn || !pendingMove) return;
+  const { orig, dest } = pendingMove;
+  pendingMove = null;
+  hidePromotionPicker();
+  commitUserMove(orig, dest, btn.dataset.piece);
+});
+
+function onUserMove(orig, dest) {
+  const fen = activeFen();
+  const tempChess = new Chess(fen);
+  const candidates = tempChess.moves({ verbose: true }).filter((m) => m.from === orig && m.to === dest);
+  if (candidates.length === 0) {
+    resyncBoard();
+    return;
+  }
+  if (candidates.some((m) => m.promotion)) {
+    pendingMove = { orig, dest };
+    cg.set({ movable: { dests: new Map() } });
+    showPromotionPicker();
+    return;
+  }
+  commitUserMove(orig, dest, null);
+}
+
+function commitUserMove(orig, dest, promotion) {
+  if (!branch) {
+    const nextPos = positions[current + 1];
+    const matchesMainLine = nextPos && nextPos.from === orig && nextPos.to === dest &&
+      (nextPos.promotion || null) === (promotion || null);
+    if (matchesMainLine) {
+      goTo(current + 1);
+      return;
+    }
+    const branchChess = new Chess(positions[current].fen);
+    const moveResult = branchChess.move({ from: orig, to: dest, promotion: promotion || undefined });
+    if (!moveResult) { resyncBoard(); return; }
+    branch = { forkPly: current, chess: branchChess, sans: [moveResult.san] };
+  } else {
+    const moveResult = branch.chess.move({ from: orig, to: dest, promotion: promotion || undefined });
+    if (!moveResult) { resyncBoard(); return; }
+    branch.sans.push(moveResult.san);
+  }
+  syncBoardFromBranch();
+  showExploringBar();
+  maybeSuggest(activeFen(), null);
 }
 
 // ── Live move suggestion ─────────────────────────────────────────────────
 
 const suggestToggle = document.getElementById('suggest-toggle');
 const evalPanel = document.getElementById('eval-panel');
-const evalScoreEl = document.getElementById('eval-score');
-const evalBestEl = document.getElementById('eval-best');
+const evalLinesEl = document.getElementById('eval-lines');
 const evalLoadingEl = document.getElementById('eval-loading');
+const RANK_BRUSHES = ['green', 'blue', 'yellow'];
 let suggestAbort = null;
 
 function formatScore(data) {
@@ -149,11 +304,34 @@ function formatScore(data) {
   return data.score_cp > 0 ? `+${pawns}` : pawns;
 }
 
-async function maybeSuggest(idx) {
+function renderLines(lines) {
+  evalLinesEl.innerHTML = lines.map((l) => `
+    <div class="eval-line">
+      <span class="eval-line-rank rank-${l.rank}"></span>
+      <span class="eval-line-score">${formatScore(l)}</span>
+      <span class="eval-line-moves">${l.preview_san || l.best_move_san || ''}</span>
+    </div>
+  `).join('');
+
+  const shapes = lines
+    .filter((l) => l.best_move_uci)
+    .map((l) => ({
+      orig: l.best_move_uci.slice(0, 2),
+      dest: l.best_move_uci.slice(2, 4),
+      brush: RANK_BRUSHES[l.rank - 1] || 'grey',
+    }));
+  cg.set({ drawable: { autoShapes: shapes } });
+}
+
+// fen: position to evaluate. ply: positions[]-index for cache lookup, or
+// null in branch mode (no game-stored analysis exists for scratch positions).
+async function maybeSuggest(fen, ply) {
   if (!suggestToggle.checked) return;
   evalPanel.style.display = 'flex';
   evalLoadingEl.style.display = 'inline';
+  cg.set({ drawable: { autoShapes: [] } }); // clear stale arrows immediately, not just on response
 
+  const token = ++moveToken;
   if (suggestAbort) suggestAbort.abort();
   suggestAbort = new AbortController();
   const signal = suggestAbort.signal;
@@ -163,27 +341,28 @@ async function maybeSuggest(idx) {
     resp = await fetch('/api/analyze-position', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: positions[idx].fen, game_id: {{ game.game_id }}, ply: idx }),
+      body: JSON.stringify({ fen, game_id: {{ game.game_id }}, ply }),
       signal,
     });
   } catch (e) {
     return; // aborted — a newer request is already in flight, let it win
   }
-  if (idx !== current || !resp.ok) return; // stale or failed — keep showing the last-known eval
+  if (token !== moveToken || !resp.ok) return; // stale or failed — keep showing the last-known eval
   const data = await resp.json();
-  if (idx !== current) return; // re-check after await, in case navigation happened mid-parse
+  if (token !== moveToken) return; // re-check after await, in case navigation happened mid-parse
 
   evalLoadingEl.style.display = 'none';
-  evalScoreEl.textContent = formatScore(data);
-  evalBestEl.textContent = data.best_move_san ? `Best: ${data.best_move_san}` : '';
+  renderLines(data.lines || []);
 }
 
 suggestToggle.addEventListener('change', () => {
   if (suggestToggle.checked) {
-    maybeSuggest(current);
+    maybeSuggest(activeFen(), branch ? null : current);
   } else {
     evalPanel.style.display = 'none';
     if (suggestAbort) suggestAbort.abort();
+    moveToken++;
+    cg.set({ drawable: { autoShapes: [] } });
   }
 });
 
@@ -289,6 +468,13 @@ document.getElementById('btn-flip').addEventListener('click', () => {
 // Keyboard navigation
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape' && pendingMove) {
+    e.preventDefault();
+    pendingMove = null;
+    hidePromotionPicker();
+    resyncBoard();
+    return;
+  }
   if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(current - 1); }
   if (e.key === 'ArrowRight') { e.preventDefault(); goTo(current + 1); }
   if (e.key === 'Home') { e.preventDefault(); goTo(0); }
