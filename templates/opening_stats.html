@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Opening Stats — Chess DB{% endblock %}
+{% block content %}
+<h1>Opening Stats &amp; Prep Gaps</h1>
+<p class="count">
+  <a href="{{ url_for('opening_explorer_root') }}">&lsaquo; Back to explorer</a>
+</p>
+
+{% if not self_player %}
+<p class="empty">No self player marked yet — sync and run <code>flask mark-self &lt;username&gt;</code>.</p>
+{% else %}
+
+<h2>Most played</h2>
+{% if top_openings %}
+<table class="game-table">
+  <thead>
+    <tr><th>Opening</th><th>Games</th><th>Wins</th><th>Losses</th><th>Draws</th><th>Win %</th></tr>
+  </thead>
+  <tbody>
+    {% for opening_id, eco, name, total, wins, losses, draws in top_openings %}
+    {% set decisive = wins + losses %}
+    {% set win_rate = ((wins / decisive * 100) if decisive else 0) %}
+    <tr class="clickable" onclick="location.href='{{ url_for('games_list', opening_id=opening_id) }}'">
+      <td>{{ eco or '' }} {{ name or 'Unknown' }}</td>
+      <td>{{ total }}</td>
+      <td>{{ wins }}</td>
+      <td>{{ losses }}</td>
+      <td>{{ draws }}</td>
+      <td>{{ '%.1f'|format(win_rate) }}%</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="count"><a href="{{ url_for('player_openings', player_id=self_player.player_id) }}">See the full breakdown &rsaquo;</a></p>
+{% else %}
+<p class="empty">No games with a recorded opening yet.</p>
+{% endif %}
+
+<h2>Needs improvement</h2>
+<p class="count">Openings with at least 5 games, worst win % first.</p>
+{% if needs_improvement %}
+<table class="game-table">
+  <thead>
+    <tr><th>Opening</th><th>Games</th><th>Wins</th><th>Losses</th><th>Draws</th><th>Win %</th></tr>
+  </thead>
+  <tbody>
+    {% for o in needs_improvement %}
+    <tr class="clickable" onclick="location.href='{{ url_for('games_list', opening_id=o.opening_id) }}'">
+      <td>{{ o.eco or '' }} {{ o.name or 'Unknown' }}</td>
+      <td>{{ o.total }}</td>
+      <td>{{ o.wins }}</td>
+      <td>{{ o.losses }}</td>
+      <td>{{ o.draws }}</td>
+      <td>{{ '%.1f'|format(o.win_rate) if o.win_rate is not none else '—' }}{{ '%' if o.win_rate is not none }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">Not enough games yet in any single opening (need at least 5).</p>
+{% endif %}
+
+<h2>Prep gaps — pros play these, you rarely do</h2>
+<p class="count">Openings with 20+ pro/broadcast games where you have few or none.</p>
+{% if prep_gaps %}
+<table class="game-table">
+  <thead>
+    <tr><th>Opening</th><th>Pro games</th><th>Your games</th></tr>
+  </thead>
+  <tbody>
+    {% for g in prep_gaps %}
+    <tr class="clickable" onclick="location.href='{{ url_for('games_list', opening_id=g.opening_id, source='broadcast') }}'">
+      <td>{{ g.eco or '' }} {{ g.name or 'Unknown' }}</td>
+      <td>{{ g.pro_total }}</td>
+      <td>{{ g.mine_total }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No major gaps found — either the pro tree isn't built yet, or your repertoire already covers what pros play most.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}

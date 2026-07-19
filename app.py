@@ -21,8 +21,11 @@ from models import (
     Event,
     Game,
     GameAnalysis,
+    GamePosition,
     MoveEval,
+    MoveEvalLine,
     Opening,
+    OpeningNode,
     Player,
     PlayerIdentity,
     Tag,
@@ -172,19 +175,168 @@ def _rating_trend(player_id, limit=200):
     return by_class
 
 
-def _pro_games_query():
-    """Games where either player has the 'pro' tag, or the game is a tournament
-    broadcast — the two ingestion paths that feed the unified /pros feed."""
+def _pro_condition():
+    """SQLAlchemy boolean expression for 'this game belongs to the pro/broadcast
+    feed' — either player has the 'pro' tag, or the game is a tournament
+    broadcast. Factored out of _pro_games_query() so the opening-explorer's
+    mine/pro scope filter can reuse it in a join instead of duplicating it."""
     from pro_accounts import PRO_TAG_NAME
 
     pro_tag = Tag.query.filter_by(name=PRO_TAG_NAME).first()
     if not pro_tag:
-        return Game.query.filter(Game.source == "broadcast")
-    return Game.query.filter(
+        return Game.source == "broadcast"
+    return (
         Game.white.has(Player.tags.any(Tag.tag_id == pro_tag.tag_id))
         | Game.black.has(Player.tags.any(Tag.tag_id == pro_tag.tag_id))
         | (Game.source == "broadcast")
     )
+
+
+def _pro_games_query():
+    """Games where either player has the 'pro' tag, or the game is a tournament
+    broadcast — the two ingestion paths that feed the unified /pros feed."""
+    return Game.query.filter(_pro_condition())
+
+
+def _opening_tree_children(node_id, scope="mine"):
+    """Per-child-move aggregated stats for an opening-tree node: game count,
+    result breakdown, and avg rating, scoped to either the self player's games
+    or the pro/broadcast feed. Mirrors _opening_breakdown's color-aware case()
+    pattern. 'pro' scope has no fixed 'self' side, so it's framed as White/Black
+    win% rather than W/L — see opening_explorer.html."""
+    if scope == "pro":
+        scope_filter = _pro_condition()
+        win_case = case((Game.result == "1-0", 1), else_=0)   # White win
+        loss_case = case((Game.result == "0-1", 1), else_=0)  # Black win
+        rating_expr = (Game.white_rating + Game.black_rating) / 2.0
+    else:
+        self_player = _self_player()
+        if not self_player:
+            return []
+        pid = self_player.player_id
+        scope_filter = (Game.white_id == pid) | (Game.black_id == pid)
+        win_case = case(
+            (and_(Game.white_id == pid, Game.result == "1-0"), 1),
+            (and_(Game.black_id == pid, Game.result == "0-1"), 1),
+            else_=0,
+        )
+        loss_case = case(
+            (and_(Game.white_id == pid, Game.result == "0-1"), 1),
+            (and_(Game.black_id == pid, Game.result == "1-0"), 1),
+            else_=0,
+        )
+        rating_expr = case((Game.white_id == pid, Game.white_rating), else_=Game.black_rating)
+
+    draw_case = case((Game.result == "1/2-1/2", 1), else_=0)
+
+    return (
+        db.session.query(
+            OpeningNode.node_id,
+            OpeningNode.move_san,
+            Opening.eco,
+            Opening.name,
+            func.count(func.distinct(GamePosition.game_id)).label("total"),
+            func.coalesce(func.sum(win_case), 0).label("wins"),
+            func.coalesce(func.sum(loss_case), 0).label("losses"),
+            func.coalesce(func.sum(draw_case), 0).label("draws"),
+            func.avg(rating_expr).label("avg_rating"),
+        )
+        .join(GamePosition, GamePosition.node_id == OpeningNode.node_id)
+        .join(Game, Game.game_id == GamePosition.game_id)
+        .outerjoin(Opening, Opening.opening_id == OpeningNode.opening_id)
+        .filter(OpeningNode.parent_id == node_id)
+        .filter(scope_filter)
+        .group_by(OpeningNode.node_id)
+        .order_by(func.count(func.distinct(GamePosition.game_id)).desc())
+        .all()
+    )
+
+
+def _opening_tree_games(node_id, scope="mine", page=1, per_page=50):
+    """Paginated list of games that passed through a given opening-tree node,
+    scoped like _opening_tree_children. Returns None if scope='mine' and no
+    self player is set (mirrors the dashboard's no-self-player guard)."""
+    q = (
+        Game.query
+        .join(GamePosition, GamePosition.game_id == Game.game_id)
+        .filter(GamePosition.node_id == node_id)
+    )
+    if scope == "pro":
+        q = q.filter(_pro_condition())
+    else:
+        self_player = _self_player()
+        if not self_player:
+            return None
+        q = q.filter((Game.white_id == self_player.player_id) | (Game.black_id == self_player.player_id))
+    q = q.order_by(Game.played_at.desc())
+    return q.paginate(page=page, per_page=per_page, error_out=False)
+
+
+def _opening_totals(scope="mine"):
+    """opening_id -> total game count, scoped like _opening_tree_children.
+    Flat (per-Opening, not per-tree-node) — used to compare 'how often pros
+    play this opening' against 'how often you do' for the prep-gaps view."""
+    if scope == "pro":
+        q = db.session.query(Game.opening_id, func.count().label("total")).filter(_pro_condition())
+    else:
+        self_player = _self_player()
+        if not self_player:
+            return {}
+        pid = self_player.player_id
+        q = db.session.query(Game.opening_id, func.count().label("total")).filter(
+            (Game.white_id == pid) | (Game.black_id == pid)
+        )
+    q = q.filter(Game.opening_id.isnot(None)).group_by(Game.opening_id)
+    return dict(q.all())
+
+
+def _repertoire_gaps(min_games=5, pro_min_games=20, gap_ratio=10):
+    """Two prep-oriented views built on top of the existing flat per-opening
+    breakdown: (1) openings you have a poor record in (win rate ascending,
+    with a min-game floor so a single loss doesn't dominate), and (2) openings
+    pros play often that you rarely reach (pro game count >= pro_min_games,
+    and either you have zero games in it or pros outnumber you by
+    gap_ratio+)."""
+    self_player = _self_player()
+    needs_improvement = []
+    if self_player:
+        for opening_id, eco, name, total, wins, losses, draws in _opening_breakdown(self_player.player_id):
+            if total < min_games:
+                continue
+            decisive = wins + losses
+            win_rate = (wins / decisive * 100) if decisive else None
+            needs_improvement.append({
+                "opening_id": opening_id, "eco": eco, "name": name,
+                "total": total, "wins": wins, "losses": losses, "draws": draws,
+                "win_rate": win_rate,
+            })
+        needs_improvement.sort(key=lambda r: r["win_rate"] if r["win_rate"] is not None else 100)
+
+    mine_totals = _opening_totals("mine")
+    pro_totals = _opening_totals("pro")
+    openings_by_id = {}
+    if pro_totals:
+        openings_by_id = {
+            o.opening_id: o for o in Opening.query.filter(Opening.opening_id.in_(pro_totals.keys())).all()
+        }
+
+    prep_gaps = []
+    for opening_id, pro_total in pro_totals.items():
+        if pro_total < pro_min_games:
+            continue
+        mine_total = mine_totals.get(opening_id, 0)
+        if mine_total == 0 or pro_total / max(mine_total, 1) >= gap_ratio:
+            opening = openings_by_id.get(opening_id)
+            prep_gaps.append({
+                "opening_id": opening_id,
+                "eco": opening.eco if opening else None,
+                "name": opening.name if opening else None,
+                "pro_total": pro_total,
+                "mine_total": mine_total,
+            })
+    prep_gaps.sort(key=lambda r: r["pro_total"], reverse=True)
+
+    return {"needs_improvement": needs_improvement[:20], "prep_gaps": prep_gaps[:20]}
 
 
 @event.listens_for(Engine, "connect")
@@ -212,6 +364,7 @@ def create_app():
         stuck = GameAnalysis.query.filter_by(analyzed_at=None).all()
         for row in stuck:
             MoveEval.query.filter_by(game_id=row.game_id).delete()
+            MoveEvalLine.query.filter_by(game_id=row.game_id).delete()
             db.session.delete(row)
         if stuck:
             db.session.commit()
@@ -363,6 +516,11 @@ def create_app():
         if row.analyzed_at is None:
             return jsonify(status="in_progress", plies_done=row.plies_done, ply_total=row.ply_total)
         moves = MoveEval.query.filter_by(game_id=game_id).order_by(MoveEval.ply).all()
+        # MoveEval.ply is a move-number (1..N); MoveEvalLine.ply is a positions[]-index
+        # (0..N) of the *pre-move* position — so move m's alternatives live at m.ply - 1.
+        lines_by_ply = {}
+        for l in MoveEvalLine.query.filter_by(game_id=game_id).order_by(MoveEvalLine.ply, MoveEvalLine.rank).all():
+            lines_by_ply.setdefault(l.ply, []).append(l)
         return jsonify(
             status="done",
             white_acpl=row.white_acpl,
@@ -374,6 +532,17 @@ def create_app():
                     "mate_in": m.mate_in,
                     "best_move_san": m.best_move_san,
                     "classification": m.classification,
+                    "lines": [
+                        {
+                            "rank": l.rank,
+                            "score_cp": l.score_cp,
+                            "mate_in": l.mate_in,
+                            "best_move_uci": l.best_move_uci,
+                            "best_move_san": l.best_move_san,
+                            "preview_san": l.pv_san,
+                        }
+                        for l in lines_by_ply.get(m.ply - 1, [])
+                    ],
                 }
                 for m in moves
             ],
@@ -390,25 +559,53 @@ def create_app():
         if game_id is not None and ply is not None:
             game_analysis = GameAnalysis.query.get(game_id)
             if game_analysis and game_analysis.analyzed_at:
-                cached = MoveEval.query.filter_by(game_id=game_id, ply=ply).first()
+                cached = (
+                    MoveEvalLine.query.filter_by(game_id=game_id, ply=ply)
+                    .order_by(MoveEvalLine.rank)
+                    .all()
+                )
                 if cached:
+                    top = cached[0]
                     return jsonify(
                         cached=True,
-                        score_cp=cached.score_cp,
-                        mate_in=cached.mate_in,
-                        best_move_san=cached.best_move_san,
+                        score_cp=top.score_cp,
+                        mate_in=top.mate_in,
+                        best_move_san=top.best_move_san,
+                        lines=[
+                            {
+                                "rank": l.rank,
+                                "score_cp": l.score_cp,
+                                "mate_in": l.mate_in,
+                                "best_move_uci": l.best_move_uci,
+                                "best_move_san": l.best_move_san,
+                                "preview_san": l.pv_san,
+                            }
+                            for l in cached
+                        ],
                     )
 
         import analysis
         try:
-            result = analysis.analyze_position(fen, app.config["STOCKFISH_PATH"])
+            result_lines = analysis.analyze_position(fen, app.config["STOCKFISH_PATH"])
         except ValueError:
             return jsonify(error="invalid fen"), 400
+        top = result_lines[0]
         return jsonify(
             cached=False,
-            score_cp=result["score_cp"],
-            mate_in=result["mate_in"],
-            best_move_san=result["best_san"],
+            score_cp=top["score_cp"],
+            mate_in=top["mate_in"],
+            best_move_san=top["best_san"],
+            lines=[
+                {
+                    "rank": l["rank"],
+                    "score_cp": l["score_cp"],
+                    "mate_in": l["mate_in"],
+                    "best_move_uci": l["best_uci"],
+                    "best_move_san": l["best_san"],
+                    "preview_san": " ".join(l["pv_san"]),
+                }
+                for l in result_lines
+            ],
         )
 
     # ── tags ─────────────────────────────────────────────────────────────
@@ -619,6 +816,58 @@ def create_app():
         pagination = q.order_by(Game.played_at.desc()).paginate(page=page, per_page=50, error_out=False)
         return render_template("pro_games.html", games=pagination.items, pagination=pagination)
 
+    # ── opening explorer ─────────────────────────────────────────────────
+
+    @app.route("/openings")
+    def opening_explorer_root():
+        root = OpeningNode.query.filter_by(parent_id=None).first()
+        if not root:
+            return render_template("opening_explorer.html", node=None)
+        scope = request.args.get("scope", "mine")
+        return redirect(url_for("opening_explorer", node_id=root.node_id, scope=scope))
+
+    @app.route("/openings/<int:node_id>")
+    def opening_explorer(node_id):
+        node = OpeningNode.query.get_or_404(node_id)
+        scope = request.args.get("scope", "mine")
+        if scope not in ("mine", "pro"):
+            scope = "mine"
+
+        breadcrumb = []
+        n = node
+        while n is not None:
+            breadcrumb.append(n)
+            n = n.parent
+        breadcrumb.reverse()
+
+        children = _opening_tree_children(node_id, scope=scope)
+
+        page = request.args.get("page", 1, type=int)
+        pagination = _opening_tree_games(node_id, scope=scope, page=page)
+
+        return render_template(
+            "opening_explorer.html",
+            node=node,
+            breadcrumb=breadcrumb,
+            children=children,
+            scope=scope,
+            pagination=pagination,
+            self_player=_self_player(),
+        )
+
+    @app.route("/openings/stats")
+    def opening_stats():
+        self_player = _self_player()
+        gaps = _repertoire_gaps()
+        top_openings = _opening_breakdown(self_player.player_id, limit=15) if self_player else []
+        return render_template(
+            "opening_stats.html",
+            self_player=self_player,
+            top_openings=top_openings,
+            needs_improvement=gaps["needs_improvement"],
+            prep_gaps=gaps["prep_gaps"],
+        )
+
     # ── sync ─────────────────────────────────────────────────────────────
 
     @app.route("/sync")
@@ -637,6 +886,8 @@ def create_app():
         if "error" in result:
             flash(result["error"], "error")
             return redirect(url_for("sync_page"))
+        import opening_tree
+        opening_tree.rebuild_all()
         flash(f"Synced {username}: {result['new_games']} new games from {result['archives']} archives.")
         return redirect(url_for("player_detail", player_id=result["player_id"]))
 
@@ -652,6 +903,8 @@ def create_app():
         if "error" in result:
             flash(result["error"], "error")
             return redirect(url_for("sync_page"))
+        import opening_tree
+        opening_tree.rebuild_all()
         flash(f"Synced {username}: {result['new_games']} new games ({result['total_games']} seen).")
         return redirect(url_for("player_detail", player_id=result["player_id"]))
 
@@ -674,6 +927,8 @@ def create_app():
         for u in usernames:
             result = sync_user(u)
             click.echo(f"{u}: {result}")
+        import opening_tree
+        click.echo(f"opening tree: {opening_tree.rebuild_all()}")
 
     @app.cli.command("sync-lichess")
     @click.argument("usernames", nargs=-1, required=True)
@@ -686,6 +941,8 @@ def create_app():
         for u in usernames:
             result = sync_user(u)
             click.echo(f"{u}: {result}")
+        import opening_tree
+        click.echo(f"opening tree: {opening_tree.rebuild_all()}")
 
     @app.cli.command("sync-pros")
     def cli_sync_pros():
@@ -714,6 +971,8 @@ def create_app():
                     player.tags.append(pro_tag)
                     db.session.commit()
             click.echo(f"{acct['username']}: {result}")
+        import opening_tree
+        click.echo(f"opening tree: {opening_tree.rebuild_all()}")
 
     @app.cli.command("sync-broadcasts")
     def cli_sync_broadcasts():
@@ -724,6 +983,19 @@ def create_app():
 
         for result in sync_all():
             click.echo(result)
+        import opening_tree
+        click.echo(f"opening tree: {opening_tree.rebuild_all()}")
+
+    @app.cli.command("build-opening-tree")
+    def cli_build_opening_tree():
+        """Backfill the opening-explorer position tree from stored PGN text
+        (no engine involved — safe to run any time, skips games already
+        ingested)."""
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        import opening_tree
+
+        click.echo(f"opening tree: {opening_tree.rebuild_all()}")
 
     @app.cli.command("mark-self")
     @click.argument("username")

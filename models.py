@@ -183,3 +183,52 @@ class MoveEval(db.Model):
     classification = db.Column(db.String(20))
 
     __table_args__ = (db.UniqueConstraint("game_id", "ply", name="uq_move_eval_game_ply"),)
+
+
+class MoveEvalLine(db.Model):
+    __tablename__ = "move_eval_line"
+
+    move_eval_line_id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), nullable=False, index=True)
+    ply = db.Column(db.Integer, nullable=False)       # positions[]-index (0..N) — NOT MoveEval.ply's move-number convention, see app.py
+    rank = db.Column(db.Integer, nullable=False)      # 1 (best) .. 3
+    score_cp = db.Column(db.Integer)
+    mate_in = db.Column(db.Integer)
+    best_move_uci = db.Column(db.String(10))
+    best_move_san = db.Column(db.String(10))
+    pv_san = db.Column(db.String(200))   # space-joined short preview, e.g. "e4 c6 d4 d5 Nc3"
+
+    __table_args__ = (db.UniqueConstraint("game_id", "ply", "rank", name="uq_move_eval_line"),)
+
+
+# ── opening explorer ─────────────────────────────────────────────────────
+# Position-frequency tree built from stored PGN text (no engine involved —
+# see opening_tree.py). Nodes are deduped by fen_key (board+turn+castling+ep,
+# no move counters) so transpositions merge into one node regardless of move
+# order. Capped at opening_tree.MAX_PLY plies; not a full-game move tree.
+
+class OpeningNode(db.Model):
+    __tablename__ = "opening_node"
+
+    node_id = db.Column(db.Integer, primary_key=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey("opening_node.node_id"), index=True)
+    ply = db.Column(db.Integer, nullable=False)
+    fen_key = db.Column(db.String(90), nullable=False, unique=True, index=True)
+    fen = db.Column(db.String(100), nullable=False)
+    move_san = db.Column(db.String(10))
+    move_uci = db.Column(db.String(10))
+    opening_id = db.Column(db.Integer, db.ForeignKey("opening.opening_id"))
+
+    parent = db.relationship("OpeningNode", remote_side=[node_id], backref="children")
+    opening = db.relationship("Opening", backref="nodes")
+
+
+class GamePosition(db.Model):
+    __tablename__ = "game_position"
+
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), primary_key=True)
+    ply = db.Column(db.Integer, primary_key=True)
+    node_id = db.Column(db.Integer, db.ForeignKey("opening_node.node_id"), nullable=False, index=True)
+
+    game = db.relationship("Game", backref="positions")
+    node = db.relationship("OpeningNode", backref="game_positions")

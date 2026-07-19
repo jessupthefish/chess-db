@@ -41,33 +41,60 @@ def classify(cp_loss: int) -> str | None:
     return None
 
 
-def _eval_position(engine: chess.engine.SimpleEngine, board: chess.Board, movetime: float = MOVETIME) -> dict:
-    """Evaluate one position. Returns white-POV score/mate plus the engine's best move."""
+LINE_PREVIEW_PLIES = 6  # ~3 full moves, lichess-style preview length
+
+
+def _build_preview(board: chess.Board, pv: list[chess.Move]) -> list[str]:
+    b = board.copy()
+    sans = []
+    for mv in pv[:LINE_PREVIEW_PLIES]:
+        sans.append(b.san(mv))
+        b.push(mv)
+    return sans
+
+
+def _eval_position_multi(
+    engine: chess.engine.SimpleEngine, board: chess.Board, movetime: float = MOVETIME, multipv: int = 3
+) -> list[dict]:
+    """Evaluate one position, up to `multipv` candidate lines (white-POV score/mate,
+    engine's best move, and a short SAN preview of the line). Returns fewer than
+    `multipv` entries if the engine can't produce that many (e.g. near-forced positions)."""
     if board.is_game_over():
         # Terminal position (checkmate/stalemate/etc) — no move to suggest, and
         # the mate/draw result itself is the "score" rather than a search result.
         if board.is_checkmate():
             # side to move is mated; the mate is a win for the other side
             mate_in = -1 if board.turn == chess.WHITE else 1
-            return {"score_cp": None, "mate_in": mate_in, "best_uci": None, "best_san": None}
-        return {"score_cp": 0, "mate_in": None, "best_uci": None, "best_san": None}
+            return [{"rank": 1, "score_cp": None, "mate_in": mate_in, "best_uci": None, "best_san": None,
+                      "pv_uci": [], "pv_san": []}]
+        return [{"rank": 1, "score_cp": 0, "mate_in": None, "best_uci": None, "best_san": None,
+                  "pv_uci": [], "pv_san": []}]
 
-    info = engine.analyse(board, chess.engine.Limit(time=movetime))
-    white_score = info["score"].white()
-    best_move = info.get("pv", [None])[0]
-    return {
-        "score_cp": white_score.score(),  # None if this is a mate line
-        "mate_in": white_score.mate(),    # None if not a mate line
-        "best_uci": best_move.uci() if best_move else None,
-        "best_san": board.san(best_move) if best_move else None,
-        "_numeric": white_score.score(mate_score=MATE_SCORE),  # for cp_loss math, never stored
-    }
+    infos = engine.analyse(board, chess.engine.Limit(time=movetime), multipv=multipv)
+    if isinstance(infos, dict):
+        infos = [infos]
+    lines = []
+    for i, info in enumerate(infos):
+        white_score = info["score"].white()
+        pv = info.get("pv", [])
+        best_move = pv[0] if pv else None
+        lines.append({
+            "rank": i + 1,
+            "score_cp": white_score.score(),  # None if this is a mate line
+            "mate_in": white_score.mate(),    # None if not a mate line
+            "best_uci": best_move.uci() if best_move else None,
+            "best_san": board.san(best_move) if best_move else None,
+            "pv_uci": [m.uci() for m in pv[:LINE_PREVIEW_PLIES]],
+            "pv_san": _build_preview(board, pv),
+            "_numeric": white_score.score(mate_score=MATE_SCORE),  # for cp_loss math, never stored
+        })
+    return lines
 
 
 def run_full_analysis(app, game_id: int) -> None:
     """Background-thread target. Must push its own app context (called from a thread,
     not a request). Opens one engine instance for the whole game, closes it at the end."""
-    from models import Game, GameAnalysis, MoveEval, db
+    from models import Game, GameAnalysis, MoveEval, MoveEvalLine, db
 
     with app.app_context():
         game = Game.query.get(game_id)
@@ -94,14 +121,27 @@ def run_full_analysis(app, game_id: int) -> None:
             try:
                 evals = []
                 for i, pos in enumerate(positions):
-                    evals.append(_eval_position(engine, pos))
+                    evals.append(_eval_position_multi(engine, pos))
                     row.plies_done = i + 1
                     if i % 5 == 0:
                         db.session.commit()
 
+                for i, lines in enumerate(evals):
+                    for line in lines:
+                        db.session.add(MoveEvalLine(
+                            game_id=game_id,
+                            ply=i,
+                            rank=line["rank"],
+                            score_cp=line["score_cp"],
+                            mate_in=line["mate_in"],
+                            best_move_uci=line["best_uci"],
+                            best_move_san=line["best_san"],
+                            pv_san=" ".join(line["pv_san"]),
+                        ))
+
                 white_losses, black_losses = [], []
                 for i in range(1, len(positions)):
-                    before, after = evals[i - 1], evals[i]
+                    before, after = evals[i - 1][0], evals[i][0]
                     mover_white = positions[i - 1].turn == chess.WHITE
                     before_n = before.get("_numeric", 0) or 0
                     after_n = after.get("_numeric", 0) or 0
@@ -133,10 +173,11 @@ def run_full_analysis(app, game_id: int) -> None:
             db.session.commit()
 
 
-def analyze_position(fen: str, stockfish_path: str, movetime: float = MOVETIME) -> dict:
+def analyze_position(fen: str, stockfish_path: str, movetime: float = MOVETIME) -> list[dict]:
     """Single-position, ephemeral, spawn-and-close. Used by the live move-suggestion toggle."""
     board = chess.Board(fen)
     with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
-        result = _eval_position(engine, board, movetime)
-    result.pop("_numeric", None)
-    return result
+        lines = _eval_position_multi(engine, board, movetime)
+    for line in lines:
+        line.pop("_numeric", None)
+    return lines
