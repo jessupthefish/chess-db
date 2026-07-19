@@ -1,0 +1,24 @@
+{# Monthly activity heatmap: year rows x 12 month columns.
+   Sequential single-hue intensity via color-mix of --accent into --bg2,
+   scaled by --v (0..1) per cell. Tooltips carry the W/L/D detail. #}
+<div class="heatmap">
+  <div class="heatmap-row heatmap-header">
+    <span class="heatmap-year"></span>
+    {% for m in ['J','F','M','A','M','J','J','A','S','O','N','D'] %}
+    <span class="heatmap-cell heatmap-month">{{ m }}</span>
+    {% endfor %}
+  </div>
+  {% for year, cells in activity_years.items() %}
+  <div class="heatmap-row">
+    <span class="heatmap-year">{{ year }}</span>
+    {% for cell in cells %}
+    {% if cell %}
+    <span class="heatmap-cell filled" style="--v: {{ '%.2f'|format(cell.count / activity_max) }}"
+          title="{{ year }}-{{ '%02d'|format(loop.index) }}: {{ cell.count }} games, {{ cell.wins }}–{{ cell.losses }}–{{ cell.draws }} ({{ cell.score }}%)"></span>
+    {% else %}
+    <span class="heatmap-cell"></span>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
