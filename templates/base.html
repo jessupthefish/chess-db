@@ -16,6 +16,7 @@
     <div class="nav-links">
       <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
       <a href="{{ url_for('games_list') }}" {% if request.endpoint == 'games_list' %}class="active"{% endif %}>Games</a>
+      <a href="{{ url_for('stats_page') }}" {% if request.endpoint == 'stats_page' %}class="active"{% endif %}>Stats</a>
       <a href="{{ url_for('players_list') }}" {% if request.endpoint == 'players_list' %}class="active"{% endif %}>Players</a>
       <a href="{{ url_for('pro_games') }}" {% if request.endpoint == 'pro_games' %}class="active"{% endif %}>Pros</a>
       <a href="{{ url_for('opening_explorer_root') }}" {% if request.endpoint in ('opening_explorer_root', 'opening_explorer', 'opening_stats') %}class="active"{% endif %}>Openings</a>

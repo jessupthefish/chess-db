@@ -5,7 +5,15 @@
 > file after every finished migration, route, or deploy, not just before stopping.
 > See `docs/ARCHITECTURE.md` for the static design reference (schema, routes, curated lists).
 
-## Status: ALL PHASES COMPLETE (last updated 2026-07-17 ~13:31)
+## Status: PHASE 10 (stats hub) SHIPPED; full-feature buildout in progress (last updated 2026-07-19)
+
+Full-feature buildout underway (plan: ~/.claude/plans/i-want-to-really-sleepy-kazoo.md
+on the Mac — dev moved back to the Mac for now, rsync-deploy to spaceship
+per deploy log). Phase 10 = /stats insights hub. Remaining planned: collections
+buildout, manual PGN import, position search, blunder puzzles, screenshot board
+import.
+
+## Previous status (2026-07-17)
 
 7 original phases plus the opening-explorer expansion (Phase 8) and the
 interactive-board expansion (Phase 9, sub-phases A-C) shipped, deployed, and
@@ -240,7 +248,24 @@ this project's standing rule.
 - [ ] Phase 7 — final push to GitHub
 - [ ] Phase 8 — opening explorer
 
+- [x] Phase 10 — statistics & insights hub (/stats): new charts.py (line_chart_svg,
+      bar_chart_svg, sparkline_svg moved from app.py — all server-rendered inline
+      SVG themed by CSS vars, per the dataviz skill: 2px lines, <=24px bars with
+      4px rounded data-ends, hairline gridlines, native <title> tooltips, selective
+      labels) and stats.py (all /stats aggregations: results by color/time-class/
+      termination, day-of-week + hour-of-day score%, monthly-activity heatmap data,
+      full rating history downsampled to last-rating-per-day <=200 points,
+      streaks, opponent-rating bands, game-length distribution, and analysis
+      insights restricted to already-analyzed games only — never triggers engine
+      work). stats.result_cases() now the single source of the W/L/D case() trio;
+      _player_record/_opening_breakdown/_opening_tree_children refactored onto it.
+      New templates/stats.html + templates/_heatmap.html, nav link, ~70 lines of
+      chart/heatmap CSS. ?time_class= filter on the whole page. Verified in a real
+      browser via Claude-in-Chrome against the Mac dev DB.
+
 ## IN PROGRESS — exact resume point
+Full-feature buildout phases B-E still to come (see plan file above); Phase 10
+(/stats) shipped. Previously:
 Nothing in progress. All 9 phases (7 original + the opening-explorer expansion
 + the interactive-board/scratch-variations/multi-line-analysis expansion) are
 complete, deployed, and verified live. Not yet pushed to GitHub — only

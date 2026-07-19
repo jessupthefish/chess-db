@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Stats — Chess DB{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Stats</h1>
+  <form method="get" class="stats-filter">
+    <select name="time_class" onchange="this.form.submit()">
+      <option value="">All time controls</option>
+      {% for tc in time_classes %}
+      <option value="{{ tc }}" {% if tc == time_class %}selected{% endif %}>{{ tc|capitalize }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="stats-row">
+  <div class="stat-card">
+    <h3>Record{{ ' — ' ~ time_class if time_class }}</h3>
+    <p class="stat-big">{{ record.wins }}–{{ record.losses }}–{{ record.draws }}</p>
+    <p class="stat-sub">{{ record.total }} games{% if score is not none %}, {{ score }}% score{% endif %}</p>
+  </div>
+  <div class="stat-card">
+    <h3>Current streak</h3>
+    {% if streak.current_type %}
+    <p class="stat-big streak-{{ streak.current_type }}">{{ streak.current_len }} {{ streak.current_type }}{{ 's' if streak.current_len != 1 and streak.current_type != 'loss' else ('es' if streak.current_len != 1 else '') }}</p>
+    {% else %}
+    <p class="stat-big">—</p>
+    {% endif %}
+    <p class="stat-sub">in a row</p>
+  </div>
+  <div class="stat-card">
+    <h3>Best win streak</h3>
+    <p class="stat-big streak-win">{{ streak.best_win }}</p>
+    <p class="stat-sub">consecutive wins</p>
+  </div>
+  <div class="stat-card">
+    <h3>Worst loss streak</h3>
+    <p class="stat-big streak-loss">{{ streak.worst_loss }}</p>
+    <p class="stat-sub">consecutive losses</p>
+  </div>
+</div>
+
+<h2>Results by color</h2>
+<div class="wld-list">
+  {% for c in by_color %}
+  <div class="wld-row">
+    <span class="wld-label">{{ c.color|capitalize }}</span>
+    {% if c.total %}
+    <div class="wld-bar" title="{{ c.wins }} wins, {{ c.losses }} losses, {{ c.draws }} draws">
+      {% if c.wins %}<span class="wld-w" style="flex-grow: {{ c.wins }}"></span>{% endif %}
+      {% if c.draws %}<span class="wld-d" style="flex-grow: {{ c.draws }}"></span>{% endif %}
+      {% if c.losses %}<span class="wld-l" style="flex-grow: {{ c.losses }}"></span>{% endif %}
+    </div>
+    <span class="wld-value">{{ c.score }}% <span class="wld-n">({{ c.total }})</span></span>
+    {% else %}
+    <span class="wld-value wld-n">no games</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% if by_tc %}
+<h2>Results by time control</h2>
+<div class="wld-list">
+  {% for t in by_tc %}
+  <div class="wld-row">
+    <span class="wld-label"><a href="{{ url_for('stats_page', time_class=t.time_class) }}">{{ t.time_class|capitalize }}</a></span>
+    <div class="wld-bar" title="{{ t.wins }} wins, {{ t.losses }} losses, {{ t.draws }} draws">
+      {% if t.wins %}<span class="wld-w" style="flex-grow: {{ t.wins }}"></span>{% endif %}
+      {% if t.draws %}<span class="wld-d" style="flex-grow: {{ t.draws }}"></span>{% endif %}
+      {% if t.losses %}<span class="wld-l" style="flex-grow: {{ t.losses }}"></span>{% endif %}
+    </div>
+    <span class="wld-value">{{ t.score }}% <span class="wld-n">({{ t.total }})</span></span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2>How you win &amp; how you lose</h2>
+<div class="stats-row">
+  <div class="stat-card termination-card">
+    <h3>Wins by</h3>
+    {% for label, count in terminations.wins[:6] %}
+    <p class="stat-line"><span>{{ label }}</span><span>{{ count }}</span></p>
+    {% else %}<p class="stat-sub">no wins yet</p>{% endfor %}
+  </div>
+  <div class="stat-card termination-card">
+    <h3>Losses by</h3>
+    {% for label, count in terminations.losses[:6] %}
+    <p class="stat-line"><span>{{ label }}</span><span>{{ count }}</span></p>
+    {% else %}<p class="stat-sub">no losses yet</p>{% endfor %}
+  </div>
+  <div class="stat-card termination-card">
+    <h3>Draws by</h3>
+    {% for label, count in terminations.draws[:6] %}
+    <p class="stat-line"><span>{{ label }}</span><span>{{ count }}</span></p>
+    {% else %}<p class="stat-sub">no draws yet</p>{% endfor %}
+  </div>
+</div>
+
+{% if rating_charts %}
+<h2>Rating history</h2>
+{% for tc, chart in rating_charts.items() %}
+<div class="chart-card">
+  <h3>{{ tc|capitalize }}</h3>
+  {{ chart|safe }}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if activity_years %}
+<h2>Activity</h2>
+<div class="chart-card">
+  {% include "_heatmap.html" %}
+</div>
+{% endif %}
+
+<h2>When you play best</h2>
+<div class="chart-grid-2">
+  {% if dow_chart %}
+  <div class="chart-card">
+    <h3>Score % by day of week</h3>
+    {{ dow_chart|safe }}
+  </div>
+  {% endif %}
+  {% if hour_chart %}
+  <div class="chart-card">
+    <h3>Score % by hour of day</h3>
+    {{ hour_chart|safe }}
+  </div>
+  {% endif %}
+</div>
+
+<div class="chart-grid-2">
+  {% if bands_chart %}
+  <div class="chart-card">
+    <h3>Score % vs opponent rating</h3>
+    {{ bands_chart|safe }}
+  </div>
+  {% endif %}
+  {% if length_chart %}
+  <div class="chart-card">
+    <h3>Games by length (moves)</h3>
+    {{ length_chart|safe }}
+  </div>
+  {% endif %}
+</div>
+
+<h2>Analysis insights</h2>
+{% if insights %}
+<p class="stat-sub insights-caveat">Based on the {{ insights.n_analyzed }} game{{ 's' if insights.n_analyzed != 1 }} you've analyzed — analyze more games to sharpen these numbers.</p>
+<div class="stats-row">
+  <div class="stat-card">
+    <h3>Avg centipawn loss</h3>
+    <p class="stat-big">{{ insights.avg_acpl if insights.avg_acpl is not none else '—' }}</p>
+    <p class="stat-sub">across analyzed games</p>
+  </div>
+  {% for p in insights.by_phase %}
+  <div class="stat-card">
+    <h3>{{ p.phase|capitalize }} mistakes</h3>
+    <p class="stat-big">{{ p.bad_rate }}%</p>
+    <p class="stat-sub">of {{ p.moves }} moves ({{ p.blunders }} blunder{{ 's' if p.blunders != 1 }})</p>
+  </div>
+  {% endfor %}
+</div>
+{% if acpl_chart %}
+<div class="chart-card">
+  <h3>Centipawn loss per game over time</h3>
+  {{ acpl_chart|safe }}
+</div>
+{% endif %}
+{% else %}
+<p class="empty">No analyzed games yet. Open any game and hit <strong>Analyze</strong> — its mistakes and centipawn loss will start feeding this section.</p>
+{% endif %}
+{% endblock %}

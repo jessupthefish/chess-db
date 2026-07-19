@@ -550,3 +550,60 @@ a.stat-line-link:hover span:first-child { text-decoration: underline; color: var
 
 .empty { color: var(--text2); font-style: italic; margin: 2rem 0; }
 .new-collection { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+
+/* ── stats page (/stats) ──────────────────────────────────────────── */
+
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.stats-filter select {
+  background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.4rem 0.6rem; font-size: 0.85rem;
+}
+
+.streak-win { color: var(--green); }
+.streak-loss { color: var(--red); }
+
+/* full-size charts */
+.chart-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.1rem; margin: 0 0 1rem;
+}
+.chart-card h3 {
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text2); margin: 0 0 0.5rem; font-weight: 600;
+}
+.chart { width: 100%; height: auto; display: block; }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-ref { stroke: var(--text2); stroke-width: 1; }
+.chart-tick { fill: var(--text2); font-size: 10px; font-family: var(--font); }
+.chart-label { fill: var(--text); font-size: 10.5px; font-weight: 600; font-family: var(--font); }
+.chart-bar path, .chart-bar rect:first-child { fill: var(--accent); }
+.chart-bar:hover path { fill: var(--accent2); }
+.chart-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.chart-grid-2 .chart-card { margin: 0; }
+
+/* W/L/D stacked bars (2px surface gaps between segments) */
+.wld-list { margin: 1rem 0 1.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.wld-row { display: flex; align-items: center; gap: 0.75rem; }
+.wld-label { width: 90px; flex-shrink: 0; font-size: 0.85rem; color: var(--text2); }
+.wld-label a { color: inherit; }
+.wld-bar { display: flex; flex: 1; height: 14px; gap: 2px; }
+.wld-bar span { border-radius: 3px; min-width: 2px; }
+.wld-w { background: var(--green); }
+.wld-d { background: var(--text2); opacity: 0.55; }
+.wld-l { background: var(--red); }
+.wld-value { width: 110px; flex-shrink: 0; font-size: 0.85rem; text-align: right; font-variant-numeric: tabular-nums; }
+.wld-n { color: var(--text2); font-size: 0.78rem; }
+
+/* monthly activity heatmap — sequential single hue via color-mix */
+.heatmap { display: flex; flex-direction: column; gap: 3px; overflow-x: auto; }
+.heatmap-row { display: flex; gap: 3px; align-items: center; }
+.heatmap-year { width: 44px; flex-shrink: 0; font-size: 0.75rem; color: var(--text2); font-variant-numeric: tabular-nums; }
+.heatmap-cell {
+  width: 26px; height: 22px; border-radius: 3px; background: var(--bg3);
+  flex-shrink: 0;
+}
+.heatmap-cell.filled { background: color-mix(in srgb, var(--accent) calc(15% + var(--v) * 85%), var(--bg3)); }
+.heatmap-header .heatmap-cell { background: none; height: auto; }
+.heatmap-month { font-size: 0.7rem; color: var(--text2); text-align: center; }
+.termination-card .stat-line span:first-child { color: var(--text2); }
+.insights-caveat { margin: -0.5rem 0 1rem; }

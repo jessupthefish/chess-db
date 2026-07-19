@@ -15,6 +15,8 @@ from sqlalchemy import and_, case, event, func
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
+import stats
+from charts import bar_chart_svg, line_chart_svg, sparkline_svg
 from config import Config
 from models import (
     Collection,
@@ -43,17 +45,7 @@ def _player_record(player_id, opponent_id=None):
     if opponent_id is not None:
         filters.append((Game.white_id == opponent_id) | (Game.black_id == opponent_id))
 
-    win_case = case(
-        (and_(Game.white_id == player_id, Game.result == "1-0"), 1),
-        (and_(Game.black_id == player_id, Game.result == "0-1"), 1),
-        else_=0,
-    )
-    loss_case = case(
-        (and_(Game.white_id == player_id, Game.result == "0-1"), 1),
-        (and_(Game.black_id == player_id, Game.result == "1-0"), 1),
-        else_=0,
-    )
-    draw_case = case((Game.result == "1/2-1/2", 1), else_=0)
+    win_case, loss_case, draw_case = stats.result_cases(player_id)
 
     wins, losses, draws, total = (
         db.session.query(
@@ -70,17 +62,7 @@ def _player_record(player_id, opponent_id=None):
 
 def _opening_breakdown(player_id, limit=None):
     """Per-opening win/loss/draw breakdown for a player, most-played first."""
-    win_case = case(
-        (and_(Game.white_id == player_id, Game.result == "1-0"), 1),
-        (and_(Game.black_id == player_id, Game.result == "0-1"), 1),
-        else_=0,
-    )
-    loss_case = case(
-        (and_(Game.white_id == player_id, Game.result == "0-1"), 1),
-        (and_(Game.black_id == player_id, Game.result == "1-0"), 1),
-        else_=0,
-    )
-    draw_case = case((Game.result == "1/2-1/2", 1), else_=0)
+    win_case, loss_case, draw_case = stats.result_cases(player_id)
 
     q = (
         db.session.query(
@@ -113,41 +95,8 @@ def _recent_games(player_ids=None, limit=15):
     return q.limit(limit).all()
 
 
-def _sparkline_svg(points, width=220, height=56, pad=8):
-    """Render a compact single-series trend sparkline as inline SVG.
-
-    points: list of (label, value) in chronological order. Uses CSS custom
-    properties (var(--accent), var(--bg2), var(--text2)) so it themes with the
-    page's existing dark/light mode automatically. 2px line, >=8px end-marker
-    with a surface-color ring, direct end-label — no gridlines/legend, this is
-    a compact stat-card sparkline, not a full chart (per the dataviz skill).
-    """
-    if len(points) < 2:
-        return ""
-    values = [v for _, v in points]
-    lo, hi = min(values), max(values)
-    if lo == hi:
-        lo, hi = lo - 1, hi + 1
-
-    def x_at(i):
-        return pad + i / (len(points) - 1) * (width - 2 * pad)
-
-    def y_at(v):
-        return height - pad - (v - lo) / (hi - lo) * (height - 2 * pad)
-
-    coords = [(x_at(i), y_at(v)) for i, (_, v) in enumerate(points)]
-    poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    last_x, last_y = coords[-1]
-    last_label, last_value = points[-1]
-
-    return f'''<svg viewBox="0 0 {width} {height}" class="sparkline" role="img" aria-label="Rating trend, currently {last_value}">
-  <polyline points="{poly}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
-  <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="6" fill="var(--bg2)" />
-  <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="4" fill="var(--accent)">
-    <title>{last_label}: {last_value}</title>
-  </circle>
-  <text x="{min(last_x + 8, width - 4)}" y="{last_y + 4:.1f}" text-anchor="{'end' if last_x + 8 > width - 30 else 'start'}" class="sparkline-label">{last_value}</text>
-</svg>'''
+# _sparkline_svg moved to charts.py (as sparkline_svg) alongside the new
+# full-size chart primitives the /stats page uses.
 
 
 def _rating_trend(player_id, limit=200):
@@ -215,16 +164,7 @@ def _opening_tree_children(node_id, scope="mine"):
             return []
         pid = self_player.player_id
         scope_filter = (Game.white_id == pid) | (Game.black_id == pid)
-        win_case = case(
-            (and_(Game.white_id == pid, Game.result == "1-0"), 1),
-            (and_(Game.black_id == pid, Game.result == "0-1"), 1),
-            else_=0,
-        )
-        loss_case = case(
-            (and_(Game.white_id == pid, Game.result == "0-1"), 1),
-            (and_(Game.black_id == pid, Game.result == "1-0"), 1),
-            else_=0,
-        )
+        win_case, loss_case, _ = stats.result_cases(pid)
         rating_expr = case((Game.white_id == pid, Game.white_rating), else_=Game.black_rating)
 
     draw_case = case((Game.result == "1/2-1/2", 1), else_=0)
@@ -388,7 +328,7 @@ def create_app():
                 (played_at.strftime("%Y-%m-%d") if played_at else "?", rating)
                 for played_at, rating in points
             ]
-            svg = _sparkline_svg(date_value_pairs)
+            svg = sparkline_svg(date_value_pairs)
             if svg:
                 sparklines[time_class] = {"svg": svg, "current": points[-1][1]}
 
@@ -407,6 +347,89 @@ def create_app():
             friend_count=friend_count,
             total_games=total_games,
             recent_pro_games=recent_pro_games,
+        )
+
+    @app.route("/stats")
+    def stats_page():
+        self_player = _self_player()
+        if not self_player:
+            flash("Mark yourself first (flask mark-self) to see personal stats.", "error")
+            return redirect(url_for("games_list"))
+        pid = self_player.player_id
+        time_class = request.args.get("time_class") or None
+
+        record = _player_record(pid)
+        streak = stats.streaks(pid, time_class)
+        by_color = stats.results_by_color(pid, time_class)
+        by_tc = stats.results_by_time_class(pid) if not time_class else []
+        terminations = stats.results_by_termination(pid, time_class)
+
+        rating_charts = {
+            tc: line_chart_svg(points, aria_label=f"{tc} rating history")
+            for tc, points in stats.rating_history(pid, time_class).items()
+        }
+
+        activity_years, activity_max = stats.monthly_activity(pid, time_class)
+
+        dow = stats.results_by_dow(pid, time_class)
+        dow_chart = bar_chart_svg(
+            [(d["label"], d["score"] or 0, f"{d['label']}: {d['score']}% score over {d['total']} games")
+             for d in dow if d["total"]],
+            height=190, percent=True, ref_value=50, ref_label="50%",
+            aria_label="Score percentage by day of week",
+        )
+        hours = stats.results_by_hour(pid, time_class)
+        hour_chart = bar_chart_svg(
+            [(h["label"], h["score"] or 0, f"{h['label']}:00 — {h['score']}% score over {h['total']} games")
+             for h in hours if h["total"]],
+            height=190, percent=True, ref_value=50, ref_label="50%",
+            aria_label="Score percentage by hour of day",
+        )
+
+        bands = stats.vs_rating_bands(pid, time_class)
+        bands_chart = bar_chart_svg(
+            [(b["label"], b["score"] or 0, f"vs {b['band']}–{b['band'] + 99}: {b['score']}% score over {b['total']} games")
+             for b in bands],
+            height=190, percent=True, ref_value=50, ref_label="50%",
+            aria_label="Score percentage by opponent rating band",
+        )
+
+        lengths = stats.game_length_distribution(pid, time_class)
+        length_chart = bar_chart_svg(
+            [(g["label"], g["total"], f"{g['label']} moves: {g['total']} games, {g['score']}% score")
+             for g in lengths],
+            height=190,
+            aria_label="Game count by length in moves",
+        )
+
+        insights = stats.analysis_insights(pid, time_class)
+        acpl_chart = ""
+        if insights and len(insights["acpl_trend"]) >= 2:
+            acpl_chart = line_chart_svg(
+                insights["acpl_trend"], height=190,
+                aria_label="Average centipawn loss per analyzed game over time",
+            )
+
+        return render_template(
+            "stats.html",
+            self_player=self_player,
+            time_class=time_class,
+            time_classes=stats.available_time_classes(pid),
+            record=record,
+            score=stats.score_pct(record["wins"], record["draws"], record["total"]),
+            streak=streak,
+            by_color=by_color,
+            by_tc=by_tc,
+            terminations=terminations,
+            rating_charts=rating_charts,
+            activity_years=activity_years,
+            activity_max=activity_max,
+            dow_chart=dow_chart,
+            hour_chart=hour_chart,
+            bands_chart=bands_chart,
+            length_chart=length_chart,
+            insights=insights,
+            acpl_chart=acpl_chart,
         )
 
     # ── games ────────────────────────────────────────────────────────────
