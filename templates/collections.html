@@ -15,7 +15,7 @@
   <a href="{{ url_for('collection_detail', coll_id=c.collection_id) }}" class="card clickable">
     <h3>{{ c.name }}</h3>
     <p>{{ c.description or '' }}</p>
-    <span class="count">{{ c.games|length }} games</span>
+    <span class="count">{{ counts.get(c.collection_id, 0) }} game{{ 's' if counts.get(c.collection_id, 0) != 1 }}</span>
   </a>
   {% endfor %}
 </div>

@@ -1,0 +1,101 @@
+{# Shared collection-picker popover. Include ONCE per page; any number of
+   buttons can open it via collectionPicker.open(gameId, anchorElement).
+   Talks to GET/POST /api/games/<id>/collections and POST /api/collections.
+   If the page has a #game-collections chip container (game_detail), the
+   chips are kept in sync after every toggle. #}
+<div id="collection-popover" class="collection-popover" hidden>
+  <div class="collection-popover-list" id="collection-popover-list"></div>
+  <div class="collection-popover-new">
+    <input type="text" id="collection-popover-input" placeholder="New collection…">
+    <button type="button" id="collection-popover-create">+</button>
+  </div>
+</div>
+
+<script>
+window.collectionPicker = (() => {
+  const pop = document.getElementById('collection-popover');
+  const list = document.getElementById('collection-popover-list');
+  const input = document.getElementById('collection-popover-input');
+  const createBtn = document.getElementById('collection-popover-create');
+  let currentGameId = null;
+
+  async function refresh() {
+    const resp = await fetch(`/api/games/${currentGameId}/collections`);
+    const data = await resp.json();
+    list.innerHTML = '';
+    if (!data.collections.length) {
+      list.innerHTML = '<p class="coll-empty">No collections yet — create one below.</p>';
+    }
+    for (const c of data.collections) {
+      const label = document.createElement('label');
+      label.className = 'coll-option';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = c.member;
+      cb.addEventListener('change', () => toggle(c.collection_id));
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + c.name));
+      list.appendChild(label);
+    }
+    syncChips(data.collections);
+  }
+
+  function syncChips(collections) {
+    const chips = document.getElementById('game-collections');
+    if (!chips) return;
+    chips.innerHTML = '';
+    for (const c of collections.filter(c => c.member)) {
+      const a = document.createElement('a');
+      a.className = 'coll-chip';
+      a.href = `/collections/${c.collection_id}`;
+      a.textContent = c.name;
+      chips.appendChild(a);
+    }
+  }
+
+  async function toggle(collectionId) {
+    await fetch(`/api/games/${currentGameId}/collections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ collection_id: collectionId }),
+    });
+    refresh();
+  }
+
+  createBtn.addEventListener('click', async () => {
+    const name = input.value.trim();
+    if (!name) return;
+    const resp = await fetch('/api/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await resp.json();
+    input.value = '';
+    if (data.collection_id) await toggle(data.collection_id);
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); createBtn.click(); }
+  });
+
+  document.addEventListener('click', e => {
+    if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.coll-open-btn')) {
+      pop.hidden = true;
+    }
+  });
+
+  return {
+    open(gameId, anchor) {
+      if (!pop.hidden && currentGameId === gameId) { pop.hidden = true; return; }
+      currentGameId = gameId;
+      const r = anchor.getBoundingClientRect();
+      pop.style.top = `${r.bottom + window.scrollY + 6}px`;
+      const left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - 260);
+      pop.style.left = `${Math.max(left, 8)}px`;
+      pop.hidden = false;
+      list.innerHTML = '<p class="coll-empty">Loading…</p>';
+      refresh();
+    },
+  };
+})();
+</script>

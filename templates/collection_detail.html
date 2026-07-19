@@ -1,27 +1,114 @@
 {% extends "base.html" %}
 {% block title %}{{ collection.name }} — Chess DB{% endblock %}
 {% block content %}
-<h1>{{ collection.name }}</h1>
-{% if collection.description %}<p>{{ collection.description }}</p>{% endif %}
+<div class="page-header">
+  <div>
+    <h1>{{ collection.name }}</h1>
+    {% if collection.description %}<p class="stat-sub">{{ collection.description }}</p>{% endif %}
+  </div>
+  <div class="coll-actions">
+    <button type="button" class="coll-open-btn" onclick="document.getElementById('coll-edit').hidden = !document.getElementById('coll-edit').hidden">Edit</button>
+    <form method="post" action="{{ url_for('delete_collection', coll_id=collection.collection_id) }}"
+          onsubmit="return confirm('Delete collection “{{ collection.name }}”? The games themselves are kept.')">
+      <button type="submit" class="coll-danger-btn">Delete</button>
+    </form>
+  </div>
+</div>
 
-{% if collection.games %}
-<table class="game-table">
+<form id="coll-edit" method="post" action="{{ url_for('update_collection', coll_id=collection.collection_id) }}" class="new-collection" hidden>
+  <input type="text" name="name" value="{{ collection.name }}" required>
+  <input type="text" name="description" value="{{ collection.description or '' }}" placeholder="Description (optional)">
+  <button type="submit">Save</button>
+</form>
+
+{% if summary.total %}
+<div class="stats-row">
+  <div class="stat-card">
+    <h3>Games</h3>
+    <p class="stat-big">{{ summary.total }}</p>
+    {% if summary.first %}
+    <p class="stat-sub">{{ summary.first.strftime('%Y-%m-%d') }} → {{ summary.last.strftime('%Y-%m-%d') }}</p>
+    {% endif %}
+  </div>
+  {% if summary.record and summary.record.total %}
+  <div class="stat-card">
+    <h3>Your record here</h3>
+    <p class="stat-big">{{ summary.record.wins }}–{{ summary.record.losses }}–{{ summary.record.draws }}</p>
+    <p class="stat-sub">{{ summary.score }}% score over {{ summary.record.total }} of your games</p>
+  </div>
+  {% endif %}
+  {% if summary.rating_lo %}
+  <div class="stat-card">
+    <h3>Your rating span</h3>
+    <p class="stat-big">{{ summary.rating_lo }}–{{ summary.rating_hi }}</p>
+    <p class="stat-sub">across these games</p>
+  </div>
+  {% endif %}
+  {% if summary.n_analyzed %}
+  <div class="stat-card">
+    <h3>Analysis</h3>
+    <p class="stat-big">{{ summary.avg_acpl if summary.avg_acpl is not none else '—' }}</p>
+    <p class="stat-sub">avg centipawn loss, {{ summary.n_analyzed }} analyzed game{{ 's' if summary.n_analyzed != 1 }}</p>
+  </div>
+  {% endif %}
+</div>
+
+{% if summary.openings %}
+<h2>Your openings in this collection</h2>
+<table class="opening-table">
   <thead>
-    <tr><th>Date</th><th>White</th><th>Black</th><th>Result</th><th>Opening</th></tr>
+    <tr><th>Opening</th><th>Games</th><th>Wins</th><th>Losses</th><th>Draws</th><th>Win %</th></tr>
   </thead>
   <tbody>
-    {% for g in collection.games %}
-    <tr onclick="location.href='{{ url_for('game_detail', game_id=g.game_id) }}'" class="clickable">
-      <td class="date">{{ g.played_at.strftime('%Y-%m-%d') if g.played_at else '—' }}</td>
-      <td>{{ g.white.display_name }}</td>
-      <td>{{ g.black.display_name }}</td>
-      <td class="result">{{ g.result }}</td>
-      <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
+    {% for opening_id, eco, name, total, wins, losses, draws in summary.openings %}
+    <tr>
+      <td><a href="{{ url_for('games_list', opening_id=opening_id) }}">{{ eco or '' }} {{ name or 'Unknown' }}</a></td>
+      <td>{{ total }}</td>
+      <td>{{ wins }}</td>
+      <td>{{ losses }}</td>
+      <td>{{ draws }}</td>
+      <td>{{ '%.0f'|format(wins / total * 100) if total else '—' }}%</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
+{% endif %}
+
+<h2>Games</h2>
+{% if games.items %}
+{% set show_collect = true %}
+<table class="game-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>White</th>
+      <th>Black</th>
+      <th>Result</th>
+      <th>Opening</th>
+      <th>Time</th>
+      <th>Moves</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in games.items %}
+    {% include "_game_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+{% include "_collection_picker.html" %}
+
+<div class="pagination">
+  {% if games.has_prev %}
+  <a href="{{ url_for('collection_detail', coll_id=collection.collection_id, page=games.prev_num) }}">&larr; Prev</a>
+  {% endif %}
+  {% if games.pages > 1 %}<span>Page {{ games.page }} of {{ games.pages }}</span>{% endif %}
+  {% if games.has_next %}
+  <a href="{{ url_for('collection_detail', coll_id=collection.collection_id, page=games.next_num) }}">Next &rarr;</a>
+  {% endif %}
+</div>
 {% else %}
-<p class="empty">No games in this collection. Add games from the game detail page.</p>
+<p class="empty">No games in this collection yet. Add games with the <strong>＋</strong> button on the <a href="{{ url_for('games_list') }}">games list</a> or from any game page.</p>
 {% endif %}
 {% endblock %}

@@ -263,6 +263,27 @@ this project's standing rule.
       chart/heatmap CSS. ?time_class= filter on the whole page. Verified in a real
       browser via Claude-in-Chrome against the Mac dev DB.
 
+- [x] Phase 11 — collections buildout: the Collection feature is now actually usable.
+      _player_record/_opening_breakdown gained a collection_id scope (join through
+      collection_game); new _collection_summary() aggregates totals/date-range plus
+      self-scoped record, rating span, top-8 openings, and analysis summary (avg
+      self ACPL over already-analyzed games only). New routes: POST /collections/
+      <id>/edit + /delete, POST /api/collections (JSON create-or-get, mirrors
+      create_tag), GET /api/games/<id>/collections (membership list for the picker;
+      the POST toggle route already existed but had no UI). collection_detail now
+      paginates instead of loading collection.games; collections_list counts via
+      one GROUP BY instead of len(c.games) (which loaded full Game rows incl. pgn).
+      New templates/_collection_picker.html — one shared popover per page, opened
+      from an "Add to collection…" button on game_detail (with live membership
+      chips) and a per-row ＋ button on games list + collection detail
+      (_game_row.html trailing cell gated by a show_collect flag so dashboard/pros
+      tables are untouched). sort_order on collection_game stays unused by
+      decision — chronological played_at ordering wins, drag-reorder not worth it.
+      Verified: full lifecycle via test client (create/toggle/summary/rename/
+      count/delete incl. association-row cleanup) + real-browser picker flow via
+      Claude-in-Chrome (gotcha found: dev server needs --debug for auto-reload;
+      stale server returned HTML 404s to the picker's fetch).
+
 ## IN PROGRESS — exact resume point
 Full-feature buildout phases B-E still to come (see plan file above); Phase 10
 (/stats) shipped. Previously:

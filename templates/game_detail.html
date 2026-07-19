@@ -82,6 +82,17 @@
       </div>
     </div>
 
+    <div class="tags-section collections-section">
+      <h3>Collections</h3>
+      <div id="game-collections" class="tag-chips">
+        {% for c in game.collections %}
+        <a class="coll-chip" href="{{ url_for('collection_detail', coll_id=c.collection_id) }}">{{ c.name }}</a>
+        {% endfor %}
+      </div>
+      <button type="button" class="coll-open-btn" onclick="collectionPicker.open({{ game.game_id }}, this)">Add to collection…</button>
+    </div>
+    {% include "_collection_picker.html" %}
+
     <form method="post" action="{{ url_for('update_notes', game_id=game.game_id) }}" class="notes-form">
       <h3>Notes</h3>
       <textarea name="notes" rows="4" placeholder="Your notes on this game…">{{ game.notes or '' }}</textarea>
