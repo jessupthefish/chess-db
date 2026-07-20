@@ -602,3 +602,11 @@ if that limitation ever becomes annoying in practice.
   by curling the live chess-db dashboard on port 8000 before accepting the new
   SSH host key (StrictHostKeyChecking=accept-new, since no TTY was available
   to confirm interactively) — not a security issue, just a stale mDNS cache.
+- 2026-07-20: Phase 15 (screenshot board import) deployed to spaceship. New
+  deps (opencv-python-headless, numpy, anthropic, cairosvg) installed clean
+  into spaceship's venv, `import board_vision` verified working on Linux
+  (opencv wheels can be platform-fussy — confirmed fine here).
+  `systemctl --user restart chess-db`, 15-route smoke test passed live,
+  then live-curl-verified /api/board-image/recognize against a real
+  synthetic test image returns the correct FEN (92.3% confidence,
+  cburnett theme) from the production service.
