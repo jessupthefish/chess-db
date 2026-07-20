@@ -157,7 +157,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
-import { computeDests, createPromotionPicker } from '{{ url_for('static', filename='js/chess-board.js') }}';
+import { computeDests, createPromotionPicker, initBoardResize } from '{{ url_for('static', filename='js/chess-board.js') }}';
 import { initSortableTable } from '{{ url_for('static', filename='js/sortable-table.js') }}';
 
 const fen = {{ node.fen|tojson }};
@@ -218,6 +218,8 @@ const cg = Chessground(boardEl, {
   },
   draggable: { enabled: true },
 });
+
+initBoardResize();
 
 document.getElementById('btn-flip').addEventListener('click', () => {
   orientation = orientation === 'white' ? 'black' : 'white';

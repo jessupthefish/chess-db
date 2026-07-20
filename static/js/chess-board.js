@@ -57,16 +57,149 @@ export function formatEvalScore(line) {
   return line.score_cp > 0 ? `+${pawns}` : pawns;
 }
 
+// Prefixes a plain SAN move list with real move numbers, lichess-style,
+// e.g. ["Nf3","Bg7","O-O","O-O"] starting from a FEN where it's move 14,
+// Black to move -> "14...Nf3 15.Bg7 O-O 16.O-O".
+export function formatPvWithMoveNumbers(fen, sans) {
+  if (!sans.length) return '';
+  const fields = fen.split(' ');
+  let moveNo = parseInt(fields[5], 10) || 1;
+  let whiteToMove = fields[1] !== 'b';
+  const tokens = sans.map((san, i) => {
+    let token;
+    if (whiteToMove) {
+      token = `${moveNo}.${san}`;
+    } else if (i === 0) {
+      token = `${moveNo}...${san}`;
+    } else {
+      token = san;
+    }
+    if (!whiteToMove) moveNo++;
+    whiteToMove = !whiteToMove;
+    return token;
+  });
+  return tokens.join(' ');
+}
+
 // Renders /api/analyze-position's `lines` array into the .eval-line markup
-// shared by every analysis panel on the site (rank swatch, score, preview
-// SAN). Board-specific extras (drawing arrows on the board itself) stay in
-// each caller — this only builds the text panel.
-export function renderEvalLines(container, lines) {
-  container.innerHTML = lines.map((l) => `
-    <div class="eval-line">
-      <span class="eval-line-rank rank-${l.rank}"></span>
-      <span class="eval-line-score">${formatEvalScore(l)}</span>
-      <span class="eval-line-moves">${l.preview_san || l.best_move_san || ''}</span>
-    </div>
-  `).join('') || '<span class="stat-sub">No lines returned.</span>';
+// shared by every analysis panel on the site: a rank badge, the score, and
+// the full move-numbered preview line. When `fen`+`cg` (the position being
+// analyzed and its Chessground instance) are given, hovering a line
+// temporarily previews that continuation on the board, reverting to the
+// real position on mouse-leave.
+export function renderEvalLines(container, lines, fen, cg) {
+  if (!lines.length) {
+    container.innerHTML = '<span class="stat-sub">No lines returned.</span>';
+    return;
+  }
+  container.innerHTML = lines.map((l) => {
+    const sans = (l.preview_san || l.best_move_san || '').split(' ').filter(Boolean);
+    const movesText = fen ? formatPvWithMoveNumbers(fen, sans) : sans.join(' ');
+    return `
+      <div class="eval-line" data-sans="${sans.join(',')}">
+        <span class="eval-rank-badge rank-${l.rank}">${l.rank}</span>
+        <div class="eval-line-body">
+          <span class="eval-line-score">${formatEvalScore(l)}</span>
+          <span class="eval-line-moves">${movesText}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  if (!fen || !cg) return;
+  container.querySelectorAll('.eval-line').forEach((row) => {
+    const sans = row.dataset.sans ? row.dataset.sans.split(',').filter(Boolean) : [];
+    if (!sans.length) return;
+    row.addEventListener('mouseenter', () => {
+      try {
+        const preview = new Chess(fen);
+        for (const san of sans) preview.move(san);
+        cg.set({ fen: preview.fen(), movable: { dests: new Map() } });
+      } catch (e) { /* malformed preview line — leave the board as-is */ }
+    });
+    row.addEventListener('mouseleave', () => {
+      cg.set({ fen, movable: { dests: computeDests(fen) } });
+    });
+  });
+}
+
+// Converts a top engine line into a 0-100 white-advantage percentage
+// (lichess's own sigmoid curve) and updates the eval bar's fill height.
+// `orientation` flips which edge the white fill grows from when the board
+// is showing Black's perspective, via the `.flipped` CSS class.
+export function updateEvalBar(barEl, topLine, orientation) {
+  if (!barEl) return;
+  const fillEl = barEl.querySelector('.eval-bar-fill');
+  if (!fillEl) return;
+  let pct = 50;
+  if (topLine) {
+    if (topLine.mate_in != null) {
+      pct = topLine.mate_in > 0 ? 99 : 1;
+    } else if (topLine.score_cp != null) {
+      pct = 50 + 50 * (2 / (1 + Math.exp(-0.00368 * topLine.score_cp)) - 1);
+    }
+  }
+  pct = Math.max(1, Math.min(99, pct));
+  barEl.classList.toggle('flipped', orientation === 'black');
+  fillEl.style.height = `${pct}%`;
+}
+
+const BOARD_SIZE_KEY = 'chessdb.boardSize';
+const BOARD_SIZE_MIN = 320;
+const BOARD_SIZE_MAX = 900;
+
+// Applies any saved board size from a previous visit, and wires up a drag
+// handle (bottom-right corner of the page's .board-wrap) so the user can
+// resize the board directly. Every board container on the site shares the
+// .board class and reads the same --board-size custom property, so setting
+// it once at :root resizes whichever board is on the current page.
+export function initBoardResize() {
+  const saved = parseInt(localStorage.getItem(BOARD_SIZE_KEY), 10);
+  if (saved >= BOARD_SIZE_MIN && saved <= BOARD_SIZE_MAX) {
+    document.documentElement.style.setProperty('--board-size', `${saved}px`);
+  }
+
+  const wrap = document.querySelector('.board-wrap');
+  if (!wrap) return;
+
+  const handle = document.createElement('div');
+  handle.className = 'board-resize-handle';
+  handle.title = 'Drag to resize the board';
+  handle.textContent = '⇲';
+  wrap.appendChild(handle);
+
+  function currentSize() {
+    const boardEl = wrap.querySelector('.board');
+    return boardEl ? boardEl.getBoundingClientRect().width : 480;
+  }
+
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startSize = 0;
+
+  handle.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startSize = currentSize();
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const delta = Math.max(e.clientX - startX, e.clientY - startY);
+    const size = Math.min(BOARD_SIZE_MAX, Math.max(BOARD_SIZE_MIN, Math.round(startSize + delta)));
+    document.documentElement.style.setProperty('--board-size', `${size}px`);
+  });
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    localStorage.setItem(BOARD_SIZE_KEY, Math.round(currentSize()));
+  }
+
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
 }

@@ -42,7 +42,12 @@
       </div>
 
       <div id="play-board-wrap" style="display: none;">
-        <div id="play-board" class="board"></div>
+        <div class="board-row">
+          <div id="play-eval-bar" class="eval-bar"><div class="eval-bar-fill"></div></div>
+          <div class="board-wrap">
+            <div id="play-board" class="board"></div>
+          </div>
+        </div>
         <div class="board-controls">
           <button type="button" id="btn-play-start" title="Back to where you started playing">⏮</button>
           <button type="button" id="btn-play-back" title="Step back">◀</button>
@@ -53,6 +58,9 @@
           <input type="checkbox" id="play-suggest-toggle">
           Live move suggestion
         </label>
+        <div id="play-eval-panel" class="eval-panel" style="display: none;">
+          <div id="play-eval-lines" class="eval-lines"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -63,7 +71,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
-import { computeDests, renderEvalLines } from '{{ url_for('static', filename='js/chess-board.js') }}';
+import { computeDests, renderEvalLines, updateEvalBar, initBoardResize } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 const uploadArea = document.getElementById('upload-area');
 const fileInput = document.getElementById('file-input');
@@ -288,7 +296,7 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
       body: JSON.stringify({ fen }),
     });
     const data = await resp.json();
-    renderEvalLines(linesEl, data.lines || []);
+    renderEvalLines(linesEl, data.lines || [], fen);
   } catch (e) {
     linesEl.textContent = 'Analysis failed.';
   }
@@ -324,7 +332,14 @@ document.getElementById('btn-play').addEventListener('click', () => {
     coordinates: true,
     movable: { free: false, color: 'both', showDests: true, dests: computeDests(playPositions[playCurrent]), events: { after: onPlayMove } },
     draggable: { enabled: true },
+    drawable: {
+      brushes: {
+        purple: { key: 'pu', color: '#6b3fa0', opacity: 1, lineWidth: 10 },
+        orange: { key: 'or', color: '#c9660a', opacity: 1, lineWidth: 10 },
+      },
+    },
   });
+  initBoardResize();
 });
 
 function onPlayMove(orig, dest) {
@@ -363,21 +378,38 @@ document.getElementById('btn-play-flip').addEventListener('click', () => {
   playCg.set({ orientation: cur === 'white' ? 'black' : 'white' });
 });
 
+const PLAY_RANK_BRUSHES = ['green', 'blue', 'yellow', 'purple', 'orange'];
+const playEvalPanel = document.getElementById('play-eval-panel');
+const playEvalLinesEl = document.getElementById('play-eval-lines');
+const playEvalBarEl = document.getElementById('play-eval-bar');
+
 const playSuggestToggle = document.getElementById('play-suggest-toggle');
-playSuggestToggle.addEventListener('change', () => maybeSuggestPlay());
+playSuggestToggle.addEventListener('change', () => {
+  if (playSuggestToggle.checked) {
+    maybeSuggestPlay();
+  } else {
+    playEvalPanel.style.display = 'none';
+    if (playCg) playCg.set({ drawable: { autoShapes: [] } });
+  }
+});
 
 async function maybeSuggestPlay() {
   if (!playSuggestToggle.checked || !playPositions) return;
+  const fen = playPositions[playCurrent];
+  playEvalPanel.style.display = 'block';
   try {
     const resp = await fetch('/api/analyze-position', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: playPositions[playCurrent] }),
+      body: JSON.stringify({ fen }),
     });
     const data = await resp.json();
-    const shapes = (data.lines || []).filter((l) => l.best_move_uci).map((l, i) => ({
+    const lines = data.lines || [];
+    renderEvalLines(playEvalLinesEl, lines, fen, playCg);
+    updateEvalBar(playEvalBarEl, lines[0], playCg.state.orientation);
+    const shapes = lines.filter((l) => l.best_move_uci).map((l) => ({
       orig: l.best_move_uci.slice(0, 2), dest: l.best_move_uci.slice(2, 4),
-      brush: ['green', 'blue', 'yellow'][i] || 'grey',
+      brush: PLAY_RANK_BRUSHES[l.rank - 1] || 'grey',
     }));
     playCg.set({ drawable: { autoShapes: shapes } });
   } catch (e) { /* ignore */ }

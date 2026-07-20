@@ -41,7 +41,7 @@ def classify(cp_loss: int) -> str | None:
     return None
 
 
-LINE_PREVIEW_PLIES = 6  # ~3 full moves, lichess-style preview length
+LINE_PREVIEW_PLIES = 10  # ~5 full moves, lichess-style preview length
 
 
 def _build_preview(board: chess.Board, pv: list[chess.Move]) -> list[str]:
@@ -54,7 +54,7 @@ def _build_preview(board: chess.Board, pv: list[chess.Move]) -> list[str]:
 
 
 def _eval_position_multi(
-    engine: chess.engine.SimpleEngine, board: chess.Board, movetime: float = MOVETIME, multipv: int = 3
+    engine: chess.engine.SimpleEngine, board: chess.Board, movetime: float = MOVETIME, multipv: int = 5
 ) -> list[dict]:
     """Evaluate one position, up to `multipv` candidate lines (white-POV score/mate,
     engine's best move, and a short SAN preview of the line). Returns fewer than

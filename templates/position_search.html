@@ -6,8 +6,11 @@
 
 <div class="search-layout">
   <div class="board-col">
-    <div class="board-wrap">
-      <div id="board" class="board"></div>
+    <div class="board-row">
+      <div id="eval-bar" class="eval-bar"><div class="eval-bar-fill"></div></div>
+      <div class="board-wrap">
+        <div id="board" class="board"></div>
+      </div>
     </div>
     <div class="board-controls">
       <button id="btn-back" title="Step back">◀</button>
@@ -22,12 +25,12 @@
     <div class="board-controls">
       <button id="btn-analyze" title="Analyze this position with Stockfish">🔬 Analyze position</button>
     </div>
-    <div id="eval-panel" class="eval-panel" style="display: none;">
-      <div id="eval-lines" class="eval-lines"></div>
-    </div>
   </div>
 
   <div class="search-results">
+    <div id="eval-panel" class="eval-panel" style="display: none;">
+      <div id="eval-lines" class="eval-lines"></div>
+    </div>
     {% if fen and valid %}
       {% if results %}
       <h2>{{ pagination.total }} game{{ 's' if pagination.total != 1 }} reached this position</h2>
@@ -79,7 +82,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
-import { computeDests, renderEvalLines } from '{{ url_for('static', filename='js/chess-board.js') }}';
+import { computeDests, renderEvalLines, updateEvalBar, initBoardResize } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 const fenInput = document.getElementById('fen-input');
 const initialFen = fenInput.value.trim();
@@ -113,6 +116,8 @@ const cg = Chessground(document.getElementById('board'), {
   },
   draggable: { enabled: true },
 });
+
+initBoardResize();
 
 function sync() {
   const fen = positions[current];
@@ -179,18 +184,22 @@ document.addEventListener('keydown', (e) => {
 
 const evalPanel = document.getElementById('eval-panel');
 const evalLinesEl = document.getElementById('eval-lines');
+const evalBarEl = document.getElementById('eval-bar');
 
 async function analyzeCurrent() {
-  evalPanel.style.display = 'flex';
+  const fen = positions[current];
+  evalPanel.style.display = 'block';
   evalLinesEl.innerHTML = '<span class="stat-sub">Analyzing…</span>';
   try {
     const resp = await fetch('/api/analyze-position', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: positions[current] }),
+      body: JSON.stringify({ fen }),
     });
     const data = await resp.json();
-    renderEvalLines(evalLinesEl, data.lines || []);
+    const lines = data.lines || [];
+    renderEvalLines(evalLinesEl, lines, fen, cg);
+    updateEvalBar(evalBarEl, lines[0], orientation);
   } catch (e) {
     evalLinesEl.textContent = 'Analysis failed.';
   }
