@@ -2,7 +2,12 @@
 {% block title %}Position search — Chess DB{% endblock %}
 {% block content %}
 <h1>Position search</h1>
-<p class="stat-sub">Set up a position by playing moves on the board or pasting a FEN, then search your whole library — every ply of every game is indexed, middlegames and endgames included.</p>
+<p class="stat-sub">Set up a position by playing moves on the board or pasting a FEN, then search — every ply of every game is indexed, middlegames and endgames included.</p>
+
+<div class="scope-toggle">
+  <a href="{{ url_for('position_search', fen=fen, scope='mine') }}" class="active-filter-pill {{ 'active' if scope == 'mine' }}">Mine</a>
+  <a href="{{ url_for('position_search', fen=fen, scope='pro') }}" class="active-filter-pill {{ 'active' if scope == 'pro' }}">Pro games</a>
+</div>
 
 <div class="search-layout">
   <div class="board-col">
@@ -19,6 +24,7 @@
       <button id="btn-flip" title="Flip board">🔄</button>
     </div>
     <form method="get" class="fen-form">
+      <input type="hidden" name="scope" value="{{ scope }}">
       <input type="text" name="fen" id="fen-input" value="{{ fen }}" placeholder="FEN…" spellcheck="false">
       <button type="submit">Search this position</button>
     </form>
@@ -33,7 +39,7 @@
     </div>
     {% if fen and valid %}
       {% if results %}
-      <h2>{{ pagination.total }} game{{ 's' if pagination.total != 1 }} reached this position</h2>
+      <h2>{{ pagination.total }} {{ 'of your' if scope == 'mine' else 'pro/broadcast' }} game{{ 's' if pagination.total != 1 }} reached this position</h2>
       <table class="game-table">
         <thead>
           <tr>
@@ -61,15 +67,15 @@
       </table>
       <div class="pagination">
         {% if pagination.has_prev %}
-        <a href="{{ url_for('position_search', fen=fen, page=pagination.prev_num) }}">&larr; Prev</a>
+        <a href="{{ url_for('position_search', fen=fen, scope=scope, page=pagination.prev_num) }}">&larr; Prev</a>
         {% endif %}
         {% if pagination.pages > 1 %}<span>Page {{ pagination.page }} of {{ pagination.pages }}</span>{% endif %}
         {% if pagination.has_next %}
-        <a href="{{ url_for('position_search', fen=fen, page=pagination.next_num) }}">Next &rarr;</a>
+        <a href="{{ url_for('position_search', fen=fen, scope=scope, page=pagination.next_num) }}">Next &rarr;</a>
         {% endif %}
       </div>
       {% else %}
-      <p class="empty">No games in your library reached this exact position.</p>
+      <p class="empty">No {{ 'games in your library' if scope == 'mine' else 'pro/broadcast games' }} reached this exact position.</p>
       {% endif %}
     {% elif not fen %}
     <p class="empty">Play out a position on the board (or paste a FEN) and hit <strong>Search this position</strong>.</p>

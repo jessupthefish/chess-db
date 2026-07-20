@@ -243,7 +243,7 @@ document.getElementById('btn-flip').addEventListener('click', () => {
 });
 
 document.getElementById('btn-analyze').addEventListener('click', () => {
-  location.href = {{ url_for('position_search', fen=node.fen, autoanalyze=1)|tojson }};
+  location.href = {{ url_for('position_search', fen=node.fen, scope=scope, autoanalyze=1)|tojson }};
 });
 
 // Back = parent breadcrumb (unambiguous). Forward = whichever child is

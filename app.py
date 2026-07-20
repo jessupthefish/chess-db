@@ -1404,7 +1404,14 @@ def create_app():
         full-game Zobrist index (position_index.py). Candidates on the current
         page are verified by replaying their PGN to the matched ply and
         comparing epd() — a hash collision costs a false candidate, never a
-        false result."""
+        false result.
+
+        scope='mine' restricts to the self player's games; scope='pro'
+        restricts to actual tournament broadcasts (Game.source ==
+        'broadcast') only — deliberately narrower than the pro/broadcast
+        condition used elsewhere (opening explorer, /pros), which also
+        includes pro-tagged accounts' regular chess.com games. Here "pro"
+        means real tournament games, not a pro's casual online matches."""
         import chess as chess_lib
         import chess.pgn as chess_pgn
         import chess.polyglot as chess_polyglot
@@ -1415,6 +1422,9 @@ def create_app():
 
         fen = (request.args.get("fen") or "").strip()
         page = request.args.get("page", 1, type=int)
+        scope = request.args.get("scope", "mine")
+        if scope not in ("mine", "pro"):
+            scope = "mine"
         board = None
         pagination = None
         results = []
@@ -1437,12 +1447,17 @@ def create_app():
                 .group_by(PositionHash.game_id)
                 .subquery()
             )
-            pagination = (
-                db.session.query(Game, matches.c.ply)
-                .join(matches, matches.c.game_id == Game.game_id)
-                .order_by(Game.played_at.desc())
-                .paginate(page=page, per_page=50, error_out=False)
-            )
+            query = db.session.query(Game, matches.c.ply).join(matches, matches.c.game_id == Game.game_id)
+            if scope == "pro":
+                query = query.filter(Game.source == "broadcast")
+            else:
+                self_player = _self_player()
+                if self_player:
+                    pid = self_player.player_id
+                    query = query.filter((Game.white_id == pid) | (Game.black_id == pid))
+                else:
+                    query = query.filter(db.false())
+            pagination = query.order_by(Game.played_at.desc()).paginate(page=page, per_page=50, error_out=False)
             for game, ply in pagination.items:
                 # collision guard: replay to the matched ply and verify
                 try:
@@ -1461,6 +1476,7 @@ def create_app():
         return render_template(
             "position_search.html",
             fen=fen,
+            scope=scope,
             valid=board is not None,
             results=results,
             pagination=pagination,
