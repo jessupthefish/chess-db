@@ -650,3 +650,46 @@ a.stat-line-link:hover span:first-child { text-decoration: underline; color: var
   background: var(--accent2); color: #fff; border: none; border-radius: var(--radius);
   padding: 0 0.6rem; cursor: pointer;
 }
+
+/* ── manual PGN import ────────────────────────────────────────────── */
+.import-form textarea {
+  width: 100%; background: var(--bg2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.7rem; font-family: var(--mono); font-size: 0.82rem; resize: vertical;
+}
+.import-actions { display: flex; justify-content: space-between; align-items: center; margin: 0.75rem 0 1.25rem; gap: 1rem; }
+.import-actions button {
+  background: var(--accent2); color: #fff; border: none; border-radius: var(--radius);
+  padding: 0.5rem 1.4rem; font-size: 0.9rem; cursor: pointer;
+}
+.import-file input { color: var(--text2); font-size: 0.82rem; }
+
+/* ── position search ──────────────────────────────────────────────── */
+.search-layout { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; gap: 1.5rem; align-items: start; }
+@media (max-width: 900px) { .search-layout { grid-template-columns: 1fr; } }
+.fen-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+.fen-form input {
+  flex: 1; min-width: 0; background: var(--bg2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.45rem 0.6rem; font-family: var(--mono); font-size: 0.78rem;
+}
+.fen-form button {
+  background: var(--accent2); color: #fff; border: none; border-radius: var(--radius);
+  padding: 0.45rem 0.9rem; font-size: 0.85rem; cursor: pointer; white-space: nowrap;
+}
+
+/* ── blunder puzzles ──────────────────────────────────────────────── */
+#puzzle-area { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+.puzzle-prompt { margin-top: 0.75rem; color: var(--text2); font-size: 0.9rem; }
+.puzzle-feedback {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1rem 1.1rem; min-width: 260px;
+}
+.feedback-headline { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.35rem; }
+.feedback-detail { color: var(--text2); font-size: 0.88rem; margin-bottom: 0.75rem; }
+.puzzle-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.puzzle-actions button {
+  background: var(--accent2); color: #fff; border: none; border-radius: var(--radius);
+  padding: 0.4rem 0.8rem; font-size: 0.85rem; cursor: pointer;
+}
+.puzzle-actions #btn-retry, .puzzle-actions #btn-reveal { background: var(--bg3); color: var(--text); }

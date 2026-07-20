@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}Puzzles — Chess DB{% endblock %}
+{% block content %}
+<h1>Puzzles from your blunders</h1>
+
+<div class="stats-row">
+  <div class="stat-card">
+    <h3>Candidates</h3>
+    <p class="stat-big">{{ stats.candidates }}</p>
+    <p class="stat-sub">blunder positions found</p>
+  </div>
+  <div class="stat-card">
+    <h3>Attempts</h3>
+    <p class="stat-big">{{ stats.attempts }}</p>
+    <p class="stat-sub">{{ stats.solved }} solved{% if stats.solve_rate is not none %} ({{ stats.solve_rate }}%){% endif %}</p>
+  </div>
+  <div class="stat-card">
+    <h3>Streak</h3>
+    <p class="stat-big streak-win">{{ stats.streak }}</p>
+    <p class="stat-sub">correct in a row</p>
+  </div>
+</div>
+
+{% if not stats.candidates %}
+<p class="empty">No blunders found yet. Analyze some games (hit <strong>Analyze</strong> on any game you played) and the puzzle set will start growing — puzzles only come from positions you've actually analyzed, so nothing is precomputed.</p>
+{% else %}
+<div id="puzzle-area">
+  <div class="board-col">
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+      <div id="promotion-picker" class="promotion-picker" style="display: none;">
+        <button type="button" data-piece="q" title="Queen">♛</button>
+        <button type="button" data-piece="r" title="Rook">♜</button>
+        <button type="button" data-piece="b" title="Bishop">♝</button>
+        <button type="button" data-piece="n" title="Knight">♞</button>
+      </div>
+    </div>
+    <p id="puzzle-prompt" class="puzzle-prompt">Loading a puzzle…</p>
+  </div>
+
+  <div class="side-col">
+    <div id="puzzle-feedback" class="puzzle-feedback" style="display: none;">
+      <p id="feedback-headline" class="feedback-headline"></p>
+      <p id="feedback-detail" class="feedback-detail"></p>
+      <div class="puzzle-actions">
+        <button type="button" id="btn-retry" style="display: none;">Retry</button>
+        <button type="button" id="btn-reveal" style="display: none;">Reveal</button>
+        <button type="button" id="btn-next">Next puzzle &rarr;</button>
+      </div>
+      <a id="link-source-game" href="#" style="display: none;">Open this game &rarr;</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if stats.candidates %}
+<script type="module">
+import { Chessground } from 'https://esm.sh/chessground@9.1.1';
+import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+
+let puzzle = null;
+let solved = false;
+let chess = null;
+let pendingMove = null;
+
+function computeDests(fen) {
+  const tempChess = new Chess(fen);
+  const dests = new Map();
+  for (const m of tempChess.moves({ verbose: true })) {
+    if (!dests.has(m.from)) dests.set(m.from, []);
+    dests.get(m.from).push(m.to);
+  }
+  return dests;
+}
+
+const boardEl = document.getElementById('board');
+const cg = Chessground(boardEl, {
+  coordinates: true,
+  animation: { duration: 150 },
+  movable: { free: false, color: undefined, showDests: true, events: { after: onUserMove } },
+  draggable: { enabled: true },
+  drawable: { enabled: true },
+});
+
+const promptEl = document.getElementById('puzzle-prompt');
+const feedbackEl = document.getElementById('puzzle-feedback');
+const headlineEl = document.getElementById('feedback-headline');
+const detailEl = document.getElementById('feedback-detail');
+const btnRetry = document.getElementById('btn-retry');
+const btnReveal = document.getElementById('btn-reveal');
+const btnNext = document.getElementById('btn-next');
+const linkGame = document.getElementById('link-source-game');
+const promoEl = document.getElementById('promotion-picker');
+
+function cpToPawns(cp) {
+  return (cp / 100).toFixed(1);
+}
+
+async function loadNext(excludeCurrent) {
+  feedbackEl.style.display = 'none';
+  btnRetry.style.display = 'none';
+  btnReveal.style.display = 'none';
+  linkGame.style.display = 'none';
+  promptEl.textContent = 'Loading a puzzle…';
+  solved = false;
+
+  let url = '/api/puzzles/next';
+  if (excludeCurrent && puzzle) url += `?exclude=${puzzle.game_id}:${puzzle.ply}`;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (data.empty) {
+    promptEl.textContent = 'No puzzles available right now.';
+    return;
+  }
+  puzzle = data;
+  chess = new Chess(puzzle.fen);
+  cg.set({
+    fen: puzzle.fen,
+    orientation: puzzle.side,
+    movable: { color: puzzle.side, dests: computeDests(puzzle.fen) },
+    drawable: { autoShapes: [] },
+    lastMove: undefined,
+  });
+  promptEl.textContent = `${puzzle.side === 'white' ? 'White' : 'Black'} to move — find the best move. (${puzzle.game_label})`;
+}
+
+function showPromotionPicker(orig, dest) {
+  pendingMove = { orig, dest };
+  promoEl.style.display = 'flex';
+}
+function hidePromotionPicker() {
+  promoEl.style.display = 'none';
+  pendingMove = null;
+}
+promoEl.querySelectorAll('button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!pendingMove) return;
+    const { orig, dest } = pendingMove;
+    hidePromotionPicker();
+    commitUserMove(orig, dest, btn.dataset.piece);
+  });
+});
+
+function onUserMove(orig, dest) {
+  if (solved) return;
+  const piece = chess.get(orig);
+  const isPromotion = piece && piece.type === 'p' && (dest[1] === '8' || dest[1] === '1');
+  if (isPromotion) {
+    showPromotionPicker(orig, dest);
+    return;
+  }
+  commitUserMove(orig, dest, undefined);
+}
+
+function commitUserMove(orig, dest, promotion) {
+  let move;
+  try {
+    move = chess.move({ from: orig, to: dest, promotion: promotion || 'q' });
+  } catch (e) {
+    cg.set({ fen: chess.fen() });
+    return;
+  }
+  cg.set({ fen: chess.fen(), movable: { dests: computeDests(chess.fen()) } });
+  const uci = move.from + move.to + (move.promotion || '');
+  checkMove(uci);
+}
+
+function checkMove(uci) {
+  solved = true;
+  const solutionUci = puzzle.solution_uci;
+  const correct = uci === solutionUci;
+
+  headlineEl.textContent = correct ? '✓ Correct!' : '✗ Not the best move';
+  headlineEl.className = 'feedback-headline ' + (correct ? 'streak-win' : 'streak-loss');
+
+  let detail = '';
+  if (!correct) {
+    detail = `Best was ${puzzle.solution_san}`;
+    if (puzzle.swing_cp !== null && puzzle.swing_cp !== undefined) {
+      detail += ` (you dropped about ${cpToPawns(Math.abs(puzzle.swing_cp))} pawns compared to it)`;
+    }
+    btnRetry.style.display = '';
+    btnReveal.style.display = '';
+  } else {
+    detail = `${puzzle.played_san} was the blunder actually played in the game — you found the fix.`;
+  }
+  detailEl.textContent = detail;
+  feedbackEl.style.display = '';
+  linkGame.href = puzzle.game_url;
+  linkGame.style.display = '';
+
+  fetch('/api/puzzles/attempt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ game_id: puzzle.game_id, ply: puzzle.ply, move_uci: uci, correct }),
+  });
+}
+
+btnRetry.addEventListener('click', () => {
+  chess = new Chess(puzzle.fen);
+  cg.set({ fen: puzzle.fen, movable: { color: puzzle.side, dests: computeDests(puzzle.fen) }, drawable: { autoShapes: [] } });
+  solved = false;
+  feedbackEl.style.display = 'none';
+});
+
+btnReveal.addEventListener('click', () => {
+  if (!puzzle.solution_uci) return;
+  const from = puzzle.solution_uci.slice(0, 2);
+  const to = puzzle.solution_uci.slice(2, 4);
+  cg.set({ drawable: { autoShapes: [{ orig: from, dest: to, brush: 'green' }] } });
+});
+
+btnNext.addEventListener('click', () => loadNext(true));
+
+loadNext(false);
+</script>
+{% endif %}
+{% endblock %}

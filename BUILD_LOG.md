@@ -284,6 +284,73 @@ this project's standing rule.
       Claude-in-Chrome (gotcha found: dev server needs --debug for auto-reload;
       stale server returned HTML 404s to the picker's fetch).
 
+- [x] Phase 12 — manual PGN import (/games/import): new sync/manual.py
+      (import_pgn_text, _resolve_manual_player mirroring sync/chesscom.py's
+      case-insensitive identity lookup, _infer_time_class from TimeControl
+      header). Dedupe via source='manual' + source_game_id = sha256(white|
+      black|date|uci-moves)[:32] under the existing unique constraint —
+      re-importing the same PGN is a counted no-op. Variants/custom-FEN/no-
+      moves/no-names games are skipped and counted. New templates/
+      games_import.html (paste + file upload), manual/broadcast added to the
+      games-list source filter, link from sync.html. Verified via test client:
+      2-game fixture imports 2 new + skips 1 chess960 variant; re-import ->
+      0 new, 2 duplicates; fields (opening/time_class/rating) land correctly;
+      cleaned up test data in FK-safe order.
+- [x] Phase 13 — full-game position search (/search/position): new
+      position_hash table (one signed-64 Zobrist hash per game-ply, FULL game
+      depth — distinct from the opening tree's 40-ply cap) + position_index.py
+      (ingest_game/rebuild_all, mirrors opening_tree.py's shape, no engine
+      calls). New `flask build-position-index` CLI command (the four existing
+      CLI import sites were missing the position_index import — fixed).
+      position_index.rebuild_all() now runs alongside opening_tree.rebuild_all()
+      at all 2 sync routes + 4 sync CLI commands + the manual-import route.
+      New /search/position route: validates FEN, hashes it, GROUP BY game
+      with min(ply), then a collision guard that replays each page's
+      candidates to the matched ply and compares epd() before trusting the
+      hash match. New templates/position_search.html — interactive
+      chessground board (same computeDests pattern as game_detail.html,
+      auto-queen promotion since this board is for reaching a position, not
+      playing a game) + FEN paste box; results table with "reached at move N".
+      "find games with this position" link added to game_detail's board
+      controls. Backfilled all 24,148 games on the Mac DB (1,728,881 rows,
+      ~2 min, +374MB db file). Verified: invalid FEN flashes without a 500;
+      a deep middlegame position (ply 45, move 23) correctly locates its
+      source game via test client; FEN-paste path verified in a real browser
+      (Claude-in-Chrome) — 24,148/24,148 games correctly found for the start
+      position. Drag-to-move on this board wasn't driven by an actual mouse
+      drag in the browser session (Chrome-automation drag timing, not a code
+      issue — movable/draggable config is byte-identical to game_detail.html's
+      already-verified board); FEN paste is the proven interaction path.
+
+- [x] Phase 14 — blunder-puzzle trainer (/puzzles): new PuzzleAttempt table
+      (attempt_id, game_id, ply in MoveEval's move-number convention, move_uci,
+      correct, attempted_at). New helpers _puzzle_candidates (MoveEval join
+      Game join GameAnalysis, classification='blunder', self-mover parity
+      filter — same pattern as stats.py's blunder_rate_by_phase), _puzzle_payload
+      (replays PGN to ply-1 for the puzzle FEN, bridges MoveEval's move-number
+      ply to MoveEvalLine's positions[]-index ply the same way
+      game_analysis_status already does — explicitly commented), _puzzle_stats.
+      New routes: GET /puzzles, GET /api/puzzles/next (random, prefers
+      never-solved via outer join + case-ordering, ?exclude= param), POST
+      /api/puzzles/attempt. New templates/puzzles.html — chessground board
+      reusing game_detail.html's computeDests/promotion-picker JS pattern
+      (deliberately duplicated rather than refactoring the most complex
+      existing page in the same phase — candidate for a future
+      static/js/board-common.js extraction), solution-arrow reveal via
+      drawable.autoShapes. Verified end-to-end: synthetic MoveEval/
+      MoveEvalLine fixture round-tripped through next_puzzle -> correct FEN/
+      side/solution; then ran a REAL on-demand Stockfish analysis (allowed —
+      per-game, user-initiated, not bulk) on a real self game to populate 8
+      real blunder candidates, played an actual move via Claude-in-Chrome
+      (drag was flaky under browser automation like the position-search
+      board, but click-to-select-then-click-to-destination completed the
+      move reliably), got real "Not the best move / Best was Rg3" feedback,
+      confirmed the POST to /api/puzzles/attempt fired and recorded, and
+      Reveal drew the correct arrow. All test/verification data (the fixture
+      rows, the one real analysis + its move evals, the one puzzle attempt)
+      cleaned up afterward; the pre-existing real analyzed game (id 170) was
+      left untouched.
+
 ## IN PROGRESS — exact resume point
 Full-feature buildout phases B-E still to come (see plan file above); Phase 10
 (/stats) shipped. Previously:

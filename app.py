@@ -1050,7 +1050,9 @@ def create_app():
             flash(result["error"], "error")
             return redirect(url_for("sync_page"))
         import opening_tree
+        import position_index
         opening_tree.rebuild_all()
+        position_index.rebuild_all()
         flash(f"Synced {username}: {result['new_games']} new games from {result['archives']} archives.")
         return redirect(url_for("player_detail", player_id=result["player_id"]))
 
@@ -1067,9 +1069,289 @@ def create_app():
             flash(result["error"], "error")
             return redirect(url_for("sync_page"))
         import opening_tree
+        import position_index
         opening_tree.rebuild_all()
+        position_index.rebuild_all()
         flash(f"Synced {username}: {result['new_games']} new games ({result['total_games']} seen).")
         return redirect(url_for("player_detail", player_id=result["player_id"]))
+
+    # ── blunder puzzles ──────────────────────────────────────────────────
+
+    def _puzzle_candidates(pid):
+        """MoveEval blunders made BY the self player in analyzed games.
+        MoveEval.ply is the move number (1..N): odd ply => White moved."""
+        self_moved = ((MoveEval.ply % 2 == 1) & (Game.white_id == pid)) | (
+            (MoveEval.ply % 2 == 0) & (Game.black_id == pid)
+        )
+        return (
+            db.session.query(MoveEval)
+            .join(Game, Game.game_id == MoveEval.game_id)
+            .join(GameAnalysis, GameAnalysis.game_id == Game.game_id)
+            .filter(GameAnalysis.analyzed_at.isnot(None))
+            .filter(MoveEval.classification == "blunder")
+            .filter(self_moved)
+        )
+
+    def _puzzle_payload(me):
+        """Build the puzzle JSON for one blunder MoveEval.
+
+        Ply-convention bridge (same as game_analysis_status's
+        lines_by_ply[m.ply - 1] lookup): MoveEval.ply is the move number m
+        (1..N); the position BEFORE move m is positions[m - 1], which is the
+        MoveEvalLine.ply convention. So the puzzle position is the replay to
+        m - 1 plies, and the engine alternatives for the puzzle are the
+        MoveEvalLine rows at ply == m - 1. me.best_move_uci/san already hold
+        the engine best from that pre-move position.
+        """
+        import io as io_lib
+
+        import chess.pgn as chess_pgn
+
+        game = db.session.get(Game, me.game_id)
+        pgn_game = chess_pgn.read_game(io_lib.StringIO(game.pgn))
+        if pgn_game is None:
+            return None
+        board = pgn_game.board()
+        played = None
+        for i, move in enumerate(pgn_game.mainline_moves(), start=1):
+            if i == me.ply:
+                played = {"uci": move.uci(), "san": board.san(move)}
+                break
+            board.push(move)
+        if played is None:
+            return None
+
+        lines = (
+            MoveEvalLine.query.filter_by(game_id=me.game_id, ply=me.ply - 1)
+            .order_by(MoveEvalLine.rank.asc())
+            .all()
+        )
+        best_before = lines[0].score_cp if lines and lines[0].score_cp is not None else None
+        swing_cp = None
+        if best_before is not None and me.score_cp is not None:
+            # both scores are white-POV; flip for a black mover
+            swing_cp = best_before - me.score_cp
+            if me.ply % 2 == 0:
+                swing_cp = -swing_cp
+
+        side = "white" if me.ply % 2 == 1 else "black"
+        return {
+            "game_id": me.game_id,
+            "ply": me.ply,
+            "move_no": (me.ply + 1) // 2,
+            "fen": board.fen(),
+            "side": side,
+            "played_uci": played["uci"],
+            "played_san": played["san"],
+            "solution_uci": me.best_move_uci,
+            "solution_san": me.best_move_san,
+            "swing_cp": swing_cp,
+            "alt_lines": [
+                {
+                    "rank": l.rank,
+                    "uci": l.best_move_uci,
+                    "san": l.best_move_san,
+                    "score_cp": l.score_cp,
+                    "mate_in": l.mate_in,
+                    "preview_san": l.pv_san,
+                }
+                for l in lines
+            ],
+            "game_label": f"{game.white.display_name} vs {game.black.display_name}"
+            + (f", {game.played_at.strftime('%Y-%m-%d')}" if game.played_at else ""),
+            "game_url": url_for("game_detail", game_id=game.game_id),
+        }
+
+    def _puzzle_stats(pid):
+        from models import PuzzleAttempt
+
+        candidates = _puzzle_candidates(pid).count()
+        attempts = PuzzleAttempt.query.count()
+        solved = PuzzleAttempt.query.filter_by(correct=True).count()
+        # current streak: walk recent attempts newest-first
+        streak = 0
+        for (correct,) in (
+            db.session.query(PuzzleAttempt.correct)
+            .order_by(PuzzleAttempt.attempted_at.desc(), PuzzleAttempt.attempt_id.desc())
+            .limit(200)
+            .all()
+        ):
+            if correct:
+                streak += 1
+            else:
+                break
+        return {
+            "candidates": candidates,
+            "attempts": attempts,
+            "solved": solved,
+            "solve_rate": round(solved / attempts * 100) if attempts else None,
+            "streak": streak,
+        }
+
+    @app.route("/puzzles")
+    def puzzles_page():
+        self_player = _self_player()
+        if not self_player:
+            flash("Mark yourself first (flask mark-self) to train on your own blunders.", "error")
+            return redirect(url_for("games_list"))
+        return render_template("puzzles.html", stats=_puzzle_stats(self_player.player_id))
+
+    @app.route("/api/puzzles/next")
+    def next_puzzle():
+        """Random blunder puzzle, preferring positions never solved yet.
+        Returns the solution too — single-user app, checking happens client-
+        side for instant feedback."""
+        from models import PuzzleAttempt
+
+        self_player = _self_player()
+        if not self_player:
+            return jsonify(error="no self player"), 400
+
+        solved = (
+            db.session.query(PuzzleAttempt.game_id, PuzzleAttempt.ply)
+            .filter(PuzzleAttempt.correct.is_(True))
+            .subquery()
+        )
+        q = _puzzle_candidates(self_player.player_id).outerjoin(
+            solved, (solved.c.game_id == MoveEval.game_id) & (solved.c.ply == MoveEval.ply)
+        )
+        exclude = request.args.get("exclude", "")
+        if ":" in exclude:
+            eg, ep = exclude.split(":", 1)
+            if eg.isdigit() and ep.isdigit():
+                q = q.filter(
+                    ~((MoveEval.game_id == int(eg)) & (MoveEval.ply == int(ep)))
+                )
+        me = q.order_by(solved.c.game_id.isnot(None), func.random()).first()
+        if me is None:
+            return jsonify(empty=True)
+        payload = _puzzle_payload(me)
+        if payload is None:
+            return jsonify(empty=True)
+        return jsonify(payload)
+
+    @app.route("/api/puzzles/attempt", methods=["POST"])
+    def record_puzzle_attempt():
+        from models import PuzzleAttempt
+
+        data = request.json or {}
+        attempt = PuzzleAttempt(
+            game_id=data.get("game_id"),
+            ply=data.get("ply"),
+            move_uci=(data.get("move_uci") or "")[:10],
+            correct=bool(data.get("correct")),
+        )
+        db.session.add(attempt)
+        db.session.commit()
+        self_player = _self_player()
+        return jsonify(ok=True, stats=_puzzle_stats(self_player.player_id) if self_player else None)
+
+    # ── position search ──────────────────────────────────────────────────
+
+    @app.route("/search/position")
+    def position_search():
+        """Find every library game that reached a given position, via the
+        full-game Zobrist index (position_index.py). Candidates on the current
+        page are verified by replaying their PGN to the matched ply and
+        comparing epd() — a hash collision costs a false candidate, never a
+        false result."""
+        import chess as chess_lib
+        import chess.pgn as chess_pgn
+        import chess.polyglot as chess_polyglot
+        import io as io_lib
+
+        from models import PositionHash
+        from position_index import _signed64
+
+        fen = (request.args.get("fen") or "").strip()
+        page = request.args.get("page", 1, type=int)
+        board = None
+        pagination = None
+        results = []
+
+        if fen:
+            try:
+                board = chess_lib.Board(fen)
+            except ValueError:
+                flash("That doesn't look like a valid FEN.", "error")
+                board = None
+
+        if board is not None:
+            target_epd = board.epd()
+            h = _signed64(chess_polyglot.zobrist_hash(board))
+            matches = (
+                db.session.query(
+                    PositionHash.game_id, func.min(PositionHash.ply).label("ply")
+                )
+                .filter(PositionHash.zobrist == h)
+                .group_by(PositionHash.game_id)
+                .subquery()
+            )
+            pagination = (
+                db.session.query(Game, matches.c.ply)
+                .join(matches, matches.c.game_id == Game.game_id)
+                .order_by(Game.played_at.desc())
+                .paginate(page=page, per_page=50, error_out=False)
+            )
+            for game, ply in pagination.items:
+                # collision guard: replay to the matched ply and verify
+                try:
+                    pgn_game = chess_pgn.read_game(io_lib.StringIO(game.pgn))
+                    b = pgn_game.board()
+                    for i, move in enumerate(pgn_game.mainline_moves(), start=1):
+                        if i > ply:
+                            break
+                        b.push(move)
+                    if b.epd() != target_epd:
+                        continue
+                except Exception:
+                    continue
+                results.append({"game": game, "ply": ply, "move_no": (ply + 1) // 2})
+
+        return render_template(
+            "position_search.html",
+            fen=fen,
+            valid=board is not None,
+            results=results,
+            pagination=pagination,
+        )
+
+    # ── manual PGN import ────────────────────────────────────────────────
+
+    @app.route("/games/import")
+    def import_page():
+        return render_template("games_import.html")
+
+    @app.route("/games/import", methods=["POST"])
+    def import_games():
+        from sync.manual import import_pgn_text
+
+        text = request.form.get("pgn", "").strip()
+        upload = request.files.get("pgn_file")
+        if upload and upload.filename:
+            text = (text + "\n\n" if text else "") + upload.read().decode(
+                "utf-8", errors="replace"
+            )
+        if not text:
+            flash("Paste a PGN or choose a file.", "error")
+            return redirect(url_for("import_page"))
+
+        result = import_pgn_text(text)
+        if result["new_games"]:
+            import opening_tree
+            import position_index
+            opening_tree.rebuild_all()
+            position_index.rebuild_all()
+
+        parts = [f"{result['new_games']} new game{'s' if result['new_games'] != 1 else ''}"]
+        if result["duplicates"]:
+            parts.append(f"{result['duplicates']} already imported")
+        if result["skipped"]:
+            parts.append(f"{result['skipped']} skipped (variants, empty, or unparseable)")
+        flash("Imported: " + ", ".join(parts) + ".", "error" if not result["new_games"] else "message")
+        if result["new_games"]:
+            return redirect(url_for("games_list", source="manual"))
+        return redirect(url_for("import_page"))
 
     # ── CLI commands ─────────────────────────────────────────────────────
 
@@ -1091,7 +1373,9 @@ def create_app():
             result = sync_user(u)
             click.echo(f"{u}: {result}")
         import opening_tree
+        import position_index
         click.echo(f"opening tree: {opening_tree.rebuild_all()}")
+        click.echo(f"position index: {position_index.rebuild_all()}")
 
     @app.cli.command("sync-lichess")
     @click.argument("usernames", nargs=-1, required=True)
@@ -1105,7 +1389,9 @@ def create_app():
             result = sync_user(u)
             click.echo(f"{u}: {result}")
         import opening_tree
+        import position_index
         click.echo(f"opening tree: {opening_tree.rebuild_all()}")
+        click.echo(f"position index: {position_index.rebuild_all()}")
 
     @app.cli.command("sync-pros")
     def cli_sync_pros():
@@ -1135,7 +1421,9 @@ def create_app():
                     db.session.commit()
             click.echo(f"{acct['username']}: {result}")
         import opening_tree
+        import position_index
         click.echo(f"opening tree: {opening_tree.rebuild_all()}")
+        click.echo(f"position index: {position_index.rebuild_all()}")
 
     @app.cli.command("sync-broadcasts")
     def cli_sync_broadcasts():
@@ -1147,7 +1435,9 @@ def create_app():
         for result in sync_all():
             click.echo(result)
         import opening_tree
+        import position_index
         click.echo(f"opening tree: {opening_tree.rebuild_all()}")
+        click.echo(f"position index: {position_index.rebuild_all()}")
 
     @app.cli.command("build-opening-tree")
     def cli_build_opening_tree():
@@ -1157,8 +1447,21 @@ def create_app():
         import logging
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         import opening_tree
+        import position_index
 
         click.echo(f"opening tree: {opening_tree.rebuild_all()}")
+        click.echo(f"position index: {position_index.rebuild_all()}")
+
+    @app.cli.command("build-position-index")
+    def cli_build_position_index():
+        """Backfill the full-game Zobrist position index (position_index.py).
+        Idempotent — only processes games not yet indexed."""
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        import position_index
+
+        click.echo(f"position index: {position_index.rebuild_all()}")
 
     @app.cli.command("mark-self")
     @click.argument("username")

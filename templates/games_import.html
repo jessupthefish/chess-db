@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Import PGN — Chess DB{% endblock %}
+{% block content %}
+<h1>Import PGN</h1>
+<p class="stat-sub">Paste one or more games in PGN format (OTB games, exports from other sites), or upload a .pgn file. Duplicates are detected automatically, players are matched to existing ones by name, and imported games show up under the <em>manual</em> source filter.</p>
+
+<form method="post" enctype="multipart/form-data" class="import-form">
+  <textarea name="pgn" rows="14" placeholder='[Event "Club Championship"]
+[Date "2026.07.12"]
+[White "Jessup, Steven"]
+[Black "Opponent, Some"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 ...'></textarea>
+  <div class="import-actions">
+    <label class="import-file">
+      <input type="file" name="pgn_file" accept=".pgn,.txt">
+    </label>
+    <button type="submit">Import</button>
+  </div>
+</form>
+
+<p class="stat-sub">Notes: chess variants and games from custom start positions are skipped. Games without moves or without player names are skipped. If a player name matches one of your existing players (any account name, or a display name like a broadcast GM), the game is attached to that player — use <code>flask link-identity</code> to merge identities later if needed.</p>
+{% endblock %}

@@ -37,6 +37,9 @@ def main() -> int:
         ("/openings/stats", (200, 302)),
         ("/stats", (200, 302)),
         ("/stats?time_class=blitz", (200, 302)),
+        ("/search/position", (200,)),
+        ("/games/import", (200,)),
+        ("/puzzles", (200, 302)),
     ]
     if game_id is not None:
         routes.append((f"/games/{game_id}", (200,)))

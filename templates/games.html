@@ -36,6 +36,8 @@
     <option value="">All sources</option>
     <option value="chesscom" {{ 'selected' if filters.get('source') == 'chesscom' }}>Chess.com</option>
     <option value="lichess" {{ 'selected' if filters.get('source') == 'lichess' }}>Lichess</option>
+    <option value="broadcast" {{ 'selected' if filters.get('source') == 'broadcast' }}>Broadcast</option>
+    <option value="manual" {{ 'selected' if filters.get('source') == 'manual' }}>Manual</option>
   </select>
   <button type="submit">Filter</button>
   {% if filters|length > 0 %}
