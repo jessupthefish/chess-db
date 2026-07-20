@@ -203,17 +203,22 @@ class MoveEvalLine(db.Model):
 
 # ── opening explorer ─────────────────────────────────────────────────────
 # Position-frequency tree built from stored PGN text (no engine involved —
-# see opening_tree.py). Nodes are deduped by fen_key (board+turn+castling+ep,
-# no move counters) so transpositions merge into one node regardless of move
-# order. Capped at opening_tree.MAX_PLY plies; not a full-game move tree.
+# see opening_tree.py). Nodes are deduped by (parent_id, fen_key) — same
+# parent position reaching the same resulting position (board+turn+castling+
+# ep, no move counters) merges into one node — so transpositions that share
+# a parent still collapse, but a position reached from two genuinely
+# different parents gets two distinct child nodes (each with its own correct
+# move_san), instead of one silently stealing the other's games. Capped at
+# opening_tree.MAX_PLY plies; not a full-game move tree.
 
 class OpeningNode(db.Model):
     __tablename__ = "opening_node"
+    __table_args__ = (db.UniqueConstraint("parent_id", "fen_key", name="uq_node_parent_fen"),)
 
     node_id = db.Column(db.Integer, primary_key=True)
     parent_id = db.Column(db.Integer, db.ForeignKey("opening_node.node_id"), index=True)
     ply = db.Column(db.Integer, nullable=False)
-    fen_key = db.Column(db.String(90), nullable=False, unique=True, index=True)
+    fen_key = db.Column(db.String(90), nullable=False, index=True)
     fen = db.Column(db.String(100), nullable=False)
     move_san = db.Column(db.String(10))
     move_uci = db.Column(db.String(10))

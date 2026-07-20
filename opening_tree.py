@@ -44,7 +44,7 @@ def normalize_key(board: chess.Board) -> str:
 def _preload_cache():
     from models import OpeningNode
 
-    return {n.fen_key: n for n in OpeningNode.query.all()}
+    return {(n.parent_id, n.fen_key): n for n in OpeningNode.query.all()}
 
 
 # Rules values seen from the two sync sources that mean "ordinary chess from
@@ -57,14 +57,21 @@ STANDARD_RULES = {"chess", "standard"}
 
 
 def _get_or_create_node(cache, fen_key, fen, parent, move_san, move_uci, ply, new_keys):
+    """Node identity is (parent, fen_key), not fen_key alone — the same
+    resulting position reached from two different parent positions is two
+    different edges (two different moves), and must become two different
+    nodes. Keying on fen_key alone would silently merge them, stealing the
+    second parent's games onto the first one's (wrong) move label."""
     from models import OpeningNode, db
 
-    node = cache.get(fen_key)
+    parent_id = parent.node_id if parent else None
+    cache_key = (parent_id, fen_key)
+    node = cache.get(cache_key)
     if node is not None:
         return node
 
     node = OpeningNode(
-        parent_id=parent.node_id if parent else None,
+        parent_id=parent_id,
         ply=ply,
         fen_key=fen_key,
         fen=fen,
@@ -73,8 +80,8 @@ def _get_or_create_node(cache, fen_key, fen, parent, move_san, move_uci, ply, ne
     )
     db.session.add(node)
     db.session.flush()  # need node.node_id to use as the next ply's parent_id
-    cache[fen_key] = node
-    new_keys.append(fen_key)
+    cache[cache_key] = node
+    new_keys.append(cache_key)
     return node
 
 
