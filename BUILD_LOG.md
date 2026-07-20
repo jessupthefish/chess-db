@@ -351,6 +351,90 @@ this project's standing rule.
       cleaned up afterward; the pre-existing real analyzed game (id 170) was
       left untouched.
 
+- [x] Phase 15 — screenshot board import (/import/board-image): recognize a
+      chess position from an uploaded/pasted screenshot, template-matching
+      primary with a Claude vision API fallback, always landing in an
+      editable board (never a blind trust of recognition).
+      Piece art provenance: 12 cburnett piece SVGs extracted from
+      chessground's own bundled CSS (base64-embedded, pulled from the public
+      npm package via its CDN — not scraped from any live board); this is
+      the same art this app's own board already renders and visually the
+      same set Lichess ships as its default piece theme. scripts/
+      render_piece_templates.py renders 6 shape-only binary silhouette
+      masks (color is determined separately, not baked into the template)
+      via cairosvg into static/piece-templates/cburnett/*.png.
+      board_vision.py pipeline: detect_board() (Canny edges + external-
+      contour search, a strict "boxiness" check — contour area vs. its own
+      bounding-box area — rejecting jagged internal noise, area >=50% of
+      image; falls back to "assume the whole image is the board" otherwise,
+      which is the common case for an already-cropped screenshot) ->
+      classify_board() (per-cell: extract a silhouette mask via edge
+      detection + largest-contour fill, NOT background subtraction —
+      see decisions log for why — shape-match via sliding-window
+      cv2.matchTemplate against the 6 templates, determine white/black via
+      an erosion-based fill-core check, not raw brightness) -> _sanity_check
+      (exactly one king per side, <=8 pawns/side, no pawns on ranks 1/8;
+      a failure means "not a plausible position", not just "low confidence"
+      — routes to the Claude fallback rather than returning garbage) ->
+      _recognize_via_claude() (opt-in via ANTHROPIC_API_KEY, structured
+      JSON-schema output per the claude-api skill, claude-opus-4-8 default,
+      CHESS_VISION_MODEL env override, stop_reason=="refusal" handled).
+      New routes GET /import/board-image, POST /api/board-image/recognize.
+      New templates/board_image_import.html: an 8x8 *plain HTML/CSS grid*
+      editor (not chessground — chessground is built around legal-move
+      play via computed dests, not free-form piece placement, and fighting
+      that API wasn't worth it once tried), palette + eraser, live FEN
+      sync both directions, paste-to-upload; Analyze (existing
+      /api/analyze-position, same eval-line rendering as game_detail.html),
+      Play from here (chessground reusing game_detail's exact computeDests/
+      movable pattern, plus the live-suggestion toggle/arrows), Find in my
+      games (links to /search/position?fen=). New deps: opencv-python-
+      headless, numpy, anthropic, cairosvg.
+      Verification (extensive — this pipeline needed real debugging, not
+      just confirmation): a from-scratch synthetic-board test harness
+      (renders known FENs onto a fake checkerboard using the same cburnett
+      SVGs, guaranteed content-correct) caught THREE real bugs before any
+      of this shipped: (1) detect_board's contour search was picking up
+      internal checkerboard-grid-line noise as "the board" on a borderless
+      test image and warping the crop, shifting every cell by roughly one
+      square — fixed via RETR_EXTERNAL + the boxiness check; (2) the
+      original background-subtraction mask silently dropped most of a
+      piece whenever its fill color was close to its square's color (white
+      piece on a light square, black piece on a dark square) — a chess.com-
+      green-toned board scheme reproduced this at ~9/32 pieces wrong;
+      switched to edge-detection + contour-fill, which recovers the full
+      silhouette from the outline stroke regardless of fill/background
+      contrast; (3) raw brightness-based white/black detection then
+      over-triggered "white" on detailed black pieces (king, bishop) whose
+      light outline stroke covered enough of the now-fuller mask to cross
+      a naive threshold — fixed with the erosion-based fill-core check
+      (a solid fill region survives erosion; a thin outline ring doesn't).
+      After fixes: 4/4 synthetic positions (start, middlegame, king+pawn
+      endgame, an asymmetric position) at 92-97% confidence on the app's
+      own board colors; 32/32 individual pieces correct on both a
+      lichess-brown-toned and a chess.com-green-toned synthetic board;
+      garbage/random-noise images and non-image bytes both fail cleanly
+      (method="failed", no 500) after also fixing a gap where a
+      sanity-check failure on the low-confidence fallback path was
+      returning a garbage FEN instead of failing. Then verified the full
+      HTTP path via Flask's test client (multipart upload -> recognize ->
+      correct FEN), and finally end-to-end in a real browser via
+      Claude-in-Chrome: uploaded a synthetic board PNG through the actual
+      file input, got "92% confidence, cburnett theme" with the editor
+      pre-filled to the exact correct FEN, placed an extra piece via the
+      palette (FEN updated live), ran Analyze (real Stockfish multipv-3
+      lines came back), and ran Play from here with live move suggestion
+      (three colored arrows drawn matching the eval lines). Known
+      limitation, not chased further: a synthetic torture-test using
+      literal pure-black/pure-white squares (no real board theme uses this)
+      degrades — noted, not fixed, since it isn't representative of any
+      real screenshot. Chess.com's actual piece art isn't in the template
+      set (proprietary, no legitimate source to render it from without a
+      real screenshot to bootstrap from) — those screenshots rely on the
+      Claude vision fallback, untested against a real key this session
+      (no ANTHROPIC_API_KEY configured) but implemented per the current
+      Claude API vision + structured-output syntax.
+
 ## IN PROGRESS — exact resume point
 Full-feature buildout phases B-E still to come (see plan file above); Phase 10
 (/stats) shipped. Previously:
@@ -473,6 +557,17 @@ if that limitation ever becomes annoying in practice.
   chromium as a background process both needed `dangerouslyDisableSandbox: true`
   in this environment's Bash tool or the calls silently failed (exit code 144)
   with no chromium.log even created.
+
+- 2026-07-20: board_vision.py's chess-position recognizer must extract piece
+  silhouettes via edge-detection + largest-contour-fill, never plain
+  background-color subtraction — the latter silently drops most of a piece
+  whenever its fill color is close to its own square's color (white piece on
+  a light square, black piece on a dark square), which is common on
+  real-world board themes (confirmed reproducible on a chess.com-green-toned
+  synthetic board, ~9/32 pieces wrong). See Phase 15 checklist entry for the
+  full debugging trail and the two other bugs a synthetic-board test harness
+  caught (contour-detection noise on borderless images; brightness-based
+  color detection over-triggering on detailed black pieces).
 
 ## Deploy log (one line per rsync+restart, with the verification step taken)
 - 2026-07-17 ~12:41: Phase 8 (opening explorer) deployed directly on spaceship (no

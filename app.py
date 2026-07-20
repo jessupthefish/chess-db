@@ -1316,6 +1316,27 @@ def create_app():
             pagination=pagination,
         )
 
+    # ── screenshot board import ─────────────────────────────────────────
+
+    @app.route("/import/board-image")
+    def board_image_page():
+        return render_template("board_image_import.html")
+
+    @app.route("/api/board-image/recognize", methods=["POST"])
+    def recognize_board_image():
+        upload = request.files.get("image")
+        if not upload or not upload.filename:
+            return jsonify(error="no image uploaded"), 400
+        image_bytes = upload.read()
+        if not image_bytes:
+            return jsonify(error="empty upload"), 400
+
+        import board_vision
+
+        media_type = upload.mimetype if upload.mimetype in ("image/png", "image/jpeg", "image/webp") else "image/png"
+        result = board_vision.recognize(image_bytes, media_type=media_type)
+        return jsonify(result)
+
     # ── manual PGN import ────────────────────────────────────────────────
 
     @app.route("/games/import")
