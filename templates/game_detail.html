@@ -38,6 +38,7 @@
       <button id="btn-end" title="Go to end">⏭</button>
       <button id="btn-flip" title="Flip board">🔄</button>
       <button id="btn-analyze" title="Analyze this game with Stockfish">🔬 Analyze</button>
+      <button id="btn-find-position" title="Find games in your library with this position">🔍</button>
     </div>
     <div id="exploring-bar" class="exploring-bar" style="display: none;">
       <span>Exploring: <span id="exploring-line"></span></span>
@@ -238,6 +239,10 @@ function hideExploringBar() {
 
 document.getElementById('btn-back-to-game').addEventListener('click', () => {
   if (branch) goTo(branch.forkPly);
+});
+
+document.getElementById('btn-find-position').addEventListener('click', () => {
+  window.location.href = '/search/position?fen=' + encodeURIComponent(activeFen());
 });
 
 const promotionPickerEl = document.getElementById('promotion-picker');

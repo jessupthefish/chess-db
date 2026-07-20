@@ -232,3 +232,32 @@ class GamePosition(db.Model):
 
     game = db.relationship("Game", backref="positions")
     node = db.relationship("OpeningNode", backref="game_positions")
+
+
+# ── full-game position index ─────────────────────────────────────────────
+# One 8-byte Zobrist hash per (game, ply) over the FULL game (unlike the
+# opening tree, which caps at 40 plies) — powers /search/position. Built
+# from stored PGN text by position_index.py; no engine involved. Hashes are
+# chess.polyglot.zobrist_hash() values converted to signed 64-bit for SQLite.
+
+class PositionHash(db.Model):
+    __tablename__ = "position_hash"
+
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), primary_key=True)
+    ply = db.Column(db.Integer, primary_key=True)   # positions[]-index: 0 = start position
+    zobrist = db.Column(db.BigInteger, nullable=False, index=True)
+
+
+class PuzzleAttempt(db.Model):
+    """One attempt at a blunder puzzle. Puzzles aren't stored — they're derived
+    live from MoveEval rows where classification='blunder' (see app.py's
+    _puzzle_candidates); an attempt records (game_id, ply) in MoveEval's
+    move-number ply convention plus what the user played."""
+    __tablename__ = "puzzle_attempt"
+
+    attempt_id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), nullable=False, index=True)
+    ply = db.Column(db.Integer, nullable=False)   # MoveEval.ply convention (move number 1..N)
+    move_uci = db.Column(db.String(10))
+    correct = db.Column(db.Boolean, nullable=False)
+    attempted_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))

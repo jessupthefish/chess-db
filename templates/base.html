@@ -20,6 +20,8 @@
       <a href="{{ url_for('players_list') }}" {% if request.endpoint == 'players_list' %}class="active"{% endif %}>Players</a>
       <a href="{{ url_for('pro_games') }}" {% if request.endpoint == 'pro_games' %}class="active"{% endif %}>Pros</a>
       <a href="{{ url_for('opening_explorer_root') }}" {% if request.endpoint in ('opening_explorer_root', 'opening_explorer', 'opening_stats') %}class="active"{% endif %}>Openings</a>
+      <a href="{{ url_for('position_search') }}" {% if request.endpoint == 'position_search' %}class="active"{% endif %}>Search</a>
+      <a href="{{ url_for('puzzles_page') }}" {% if request.endpoint == 'puzzles_page' %}class="active"{% endif %}>Puzzles</a>
       <a href="{{ url_for('collections_list') }}" {% if request.endpoint == 'collections_list' %}class="active"{% endif %}>Collections</a>
       <a href="{{ url_for('sync_page') }}" {% if request.endpoint == 'sync_page' %}class="active"{% endif %}>Sync</a>
     </div>

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Position search — Chess DB{% endblock %}
+{% block content %}
+<h1>Position search</h1>
+<p class="stat-sub">Set up a position by playing moves on the board or pasting a FEN, then search your whole library — every ply of every game is indexed, middlegames and endgames included.</p>
+
+<div class="search-layout">
+  <div class="board-col">
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+    </div>
+    <div class="board-controls">
+      <button id="btn-undo" title="Undo last move">↩ Undo</button>
+      <button id="btn-reset" title="Back to start position">⏮ Reset</button>
+      <button id="btn-flip" title="Flip board">🔄</button>
+    </div>
+    <form method="get" class="fen-form">
+      <input type="text" name="fen" id="fen-input" value="{{ fen }}" placeholder="FEN…" spellcheck="false">
+      <button type="submit">Search this position</button>
+    </form>
+  </div>
+
+  <div class="search-results">
+    {% if fen and valid %}
+      {% if results %}
+      <h2>{{ pagination.total }} game{{ 's' if pagination.total != 1 }} reached this position</h2>
+      <table class="game-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>White</th>
+            <th>Black</th>
+            <th>Result</th>
+            <th>Opening</th>
+            <th>Reached at</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in results %}
+          {% set g = r.game %}
+          <tr onclick="location.href='{{ url_for('game_detail', game_id=g.game_id) }}'" class="clickable">
+            <td class="date">{{ g.played_at.strftime('%Y-%m-%d') if g.played_at else '—' }}</td>
+            <td>{% if g.white.is_self %}<strong>{% endif %}{{ g.white.display_name }}{% if g.white.is_self %}</strong>{% endif %}</td>
+            <td>{% if g.black.is_self %}<strong>{% endif %}{{ g.black.display_name }}{% if g.black.is_self %}</strong>{% endif %}</td>
+            <td class="result">{{ g.result }}</td>
+            <td class="opening">{{ g.opening.name[:30] if g.opening and g.opening.name else '—' }}</td>
+            <td>move {{ r.move_no }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="pagination">
+        {% if pagination.has_prev %}
+        <a href="{{ url_for('position_search', fen=fen, page=pagination.prev_num) }}">&larr; Prev</a>
+        {% endif %}
+        {% if pagination.pages > 1 %}<span>Page {{ pagination.page }} of {{ pagination.pages }}</span>{% endif %}
+        {% if pagination.has_next %}
+        <a href="{{ url_for('position_search', fen=fen, page=pagination.next_num) }}">Next &rarr;</a>
+        {% endif %}
+      </div>
+      {% else %}
+      <p class="empty">No games in your library reached this exact position.</p>
+      {% endif %}
+    {% elif not fen %}
+    <p class="empty">Play out a position on the board (or paste a FEN) and hit <strong>Search this position</strong>.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { Chessground } from 'https://esm.sh/chessground@9.1.1';
+import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+
+const fenInput = document.getElementById('fen-input');
+const initialFen = fenInput.value.trim();
+
+let chess;
+try {
+  chess = initialFen ? new Chess(initialFen) : new Chess();
+} catch (e) {
+  chess = new Chess();
+}
+
+// Same computeDests pattern as game_detail.html — legal-move play-through.
+function computeDests(fen) {
+  const tempChess = new Chess(fen);
+  const dests = new Map();
+  for (const m of tempChess.moves({ verbose: true })) {
+    if (!dests.has(m.from)) dests.set(m.from, []);
+    dests.get(m.from).push(m.to);
+  }
+  return dests;
+}
+
+let orientation = 'white';
+const cg = Chessground(document.getElementById('board'), {
+  fen: chess.fen(),
+  orientation,
+  coordinates: true,
+  animation: { duration: 150 },
+  movable: {
+    free: false,
+    color: 'both',
+    showDests: true,
+    dests: computeDests(chess.fen()),
+    events: { after: onUserMove },
+  },
+  draggable: { enabled: true },
+});
+
+function sync() {
+  const fen = chess.fen();
+  cg.set({ fen, movable: { dests: computeDests(fen) } });
+  fenInput.value = fen;
+}
+
+function onUserMove(orig, dest) {
+  // auto-queen promotions: this board is for reaching a position, not
+  // playing a game — pick the overwhelmingly common promotion piece
+  try {
+    chess.move({ from: orig, to: dest, promotion: 'q' });
+  } catch (e) { /* illegal per chess.js — resync below */ }
+  sync();
+}
+
+document.getElementById('btn-undo').addEventListener('click', () => { chess.undo(); sync(); });
+document.getElementById('btn-reset').addEventListener('click', () => { chess.reset(); sync(); });
+document.getElementById('btn-flip').addEventListener('click', () => {
+  orientation = orientation === 'white' ? 'black' : 'white';
+  cg.set({ orientation });
+});
+
+// pasting a FEN into the box updates the board immediately
+fenInput.addEventListener('change', () => {
+  const v = fenInput.value.trim();
+  if (!v) { chess.reset(); sync(); return; }
+  try {
+    chess = new Chess(v);
+    sync();
+  } catch (e) { /* leave as-is; server will flash if submitted invalid */ }
+});
+</script>
+{% endblock %}
