@@ -57,36 +57,43 @@ export function formatEvalScore(line) {
   return line.score_cp > 0 ? `+${pawns}` : pawns;
 }
 
-// Prefixes a plain SAN move list with real move numbers, lichess-style,
-// e.g. ["Nf3","Bg7","O-O","O-O"] starting from a FEN where it's move 14,
-// Black to move -> "14...Nf3 15.Bg7 O-O 16.O-O".
-export function formatPvWithMoveNumbers(fen, sans) {
+// Replays a plain SAN move list from a FEN via chess.js, building HTML with
+// one hoverable <span class="eval-move" data-fen="..."> per move — each
+// carrying the cumulative position *at that exact move*, precomputed once —
+// plus lichess-style move-number prefixes (e.g. "14." / "14...") as plain
+// text between them. Lets a caller preview any point along a line, not just
+// its final position.
+function buildPvSpans(fen, sans) {
   if (!sans.length) return '';
+  const chess = new Chess(fen);
   const fields = fen.split(' ');
   let moveNo = parseInt(fields[5], 10) || 1;
   let whiteToMove = fields[1] !== 'b';
-  const tokens = sans.map((san, i) => {
-    let token;
+  const parts = sans.map((san, i) => {
+    let prefix = '';
     if (whiteToMove) {
-      token = `${moveNo}.${san}`;
+      prefix = `${moveNo}.`;
     } else if (i === 0) {
-      token = `${moveNo}...${san}`;
-    } else {
-      token = san;
+      prefix = `${moveNo}...`;
     }
+    let moveFen = fen;
+    try {
+      chess.move(san);
+      moveFen = chess.fen();
+    } catch (e) { /* malformed SAN — span still renders, just won't preview correctly */ }
     if (!whiteToMove) moveNo++;
     whiteToMove = !whiteToMove;
-    return token;
+    return `${prefix}<span class="eval-move" data-fen="${moveFen}">${san}</span>`;
   });
-  return tokens.join(' ');
+  return parts.join(' ');
 }
 
 // Renders /api/analyze-position's `lines` array into the .eval-line markup
 // shared by every analysis panel on the site: a rank badge, the score, and
 // the full move-numbered preview line. When `fen`+`cg` (the position being
-// analyzed and its Chessground instance) are given, hovering a line
-// temporarily previews that continuation on the board, reverting to the
-// real position on mouse-leave.
+// analyzed and its Chessground instance) are given, hovering any individual
+// move within a line previews the board exactly as of that move, reverting
+// to the real position on mouse-leave.
 export function renderEvalLines(container, lines, fen, cg) {
   if (!lines.length) {
     container.innerHTML = '<span class="stat-sub">No lines returned.</span>';
@@ -94,30 +101,24 @@ export function renderEvalLines(container, lines, fen, cg) {
   }
   container.innerHTML = lines.map((l) => {
     const sans = (l.preview_san || l.best_move_san || '').split(' ').filter(Boolean);
-    const movesText = fen ? formatPvWithMoveNumbers(fen, sans) : sans.join(' ');
+    const movesHtml = fen ? buildPvSpans(fen, sans) : sans.join(' ');
     return `
-      <div class="eval-line" data-sans="${sans.join(',')}">
+      <div class="eval-line">
         <span class="eval-rank-badge rank-${l.rank}">${l.rank}</span>
         <div class="eval-line-body">
           <span class="eval-line-score">${formatEvalScore(l)}</span>
-          <span class="eval-line-moves">${movesText}</span>
+          <span class="eval-line-moves">${movesHtml}</span>
         </div>
       </div>
     `;
   }).join('');
 
   if (!fen || !cg) return;
-  container.querySelectorAll('.eval-line').forEach((row) => {
-    const sans = row.dataset.sans ? row.dataset.sans.split(',').filter(Boolean) : [];
-    if (!sans.length) return;
-    row.addEventListener('mouseenter', () => {
-      try {
-        const preview = new Chess(fen);
-        for (const san of sans) preview.move(san);
-        cg.set({ fen: preview.fen(), movable: { dests: new Map() } });
-      } catch (e) { /* malformed preview line — leave the board as-is */ }
+  container.querySelectorAll('.eval-move').forEach((span) => {
+    span.addEventListener('mouseenter', () => {
+      cg.set({ fen: span.dataset.fen, movable: { dests: new Map() } });
     });
-    row.addEventListener('mouseleave', () => {
+    span.addEventListener('mouseleave', () => {
       cg.set({ fen, movable: { dests: computeDests(fen) } });
     });
   });

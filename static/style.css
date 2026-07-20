@@ -371,6 +371,8 @@ textarea { width: 100%; resize: vertical; }
   word-break: break-word;
   line-height: 1.5;
 }
+.eval-move { cursor: pointer; border-radius: 3px; padding: 0 2px; }
+.eval-move:hover { background: var(--bg3); color: var(--accent); }
 /* the top engine line reads as the headline eval, lichess-style */
 .eval-line:first-child .eval-rank-badge { width: 2rem; height: 2rem; font-size: 0.85rem; }
 .eval-line:first-child .eval-line-score { font-size: 1.3rem; }
