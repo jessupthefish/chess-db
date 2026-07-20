@@ -44,6 +44,9 @@
       <div id="play-board-wrap" style="display: none;">
         <div id="play-board" class="board"></div>
         <div class="board-controls">
+          <button type="button" id="btn-play-start" title="Back to where you started playing">⏮</button>
+          <button type="button" id="btn-play-back" title="Step back">◀</button>
+          <button type="button" id="btn-play-forward" title="Step forward">▶</button>
           <button type="button" id="btn-play-flip">🔄 Flip</button>
         </div>
         <label class="suggest-toggle">
@@ -60,7 +63,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
-import { computeDests } from '{{ url_for('static', filename='js/chess-board.js') }}';
+import { computeDests, renderEvalLines } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 const uploadArea = document.getElementById('upload-area');
 const fileInput = document.getElementById('file-input');
@@ -285,11 +288,7 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
       body: JSON.stringify({ fen }),
     });
     const data = await resp.json();
-    const lines = data.lines || [];
-    linesEl.innerHTML = lines.map((l) => {
-      const score = l.mate_in != null ? `M${Math.abs(l.mate_in)}` : (l.score_cp != null ? (l.score_cp/100).toFixed(1) : '—');
-      return `<div class="eval-line"><span class="eval-line-rank rank-${l.rank}"></span><span class="eval-line-score">${score}</span><span class="eval-line-moves">${l.preview_san || l.best_move_san || ''}</span></div>`;
-    }).join('') || '<span class="stat-sub">No lines returned.</span>';
+    renderEvalLines(linesEl, data.lines || []);
   } catch (e) {
     linesEl.textContent = 'Analysis failed.';
   }
@@ -301,33 +300,63 @@ document.getElementById('btn-search').addEventListener('click', (e) => {
 });
 
 let playCg = null;
-let playChess = null;
+// playPositions/playCurrent: a scratch move-history stack (not a fixed
+// game), so playing a new move after stepping back truncates anything past
+// playCurrent before appending — standard undo/redo semantics.
+let playPositions = null;
+let playCurrent = 0;
+
+function playSync() {
+  const fen = playPositions[playCurrent];
+  playCg.set({ fen, movable: { dests: computeDests(fen) } });
+}
 
 document.getElementById('btn-play').addEventListener('click', () => {
   const fen = fenField.value.trim();
   let valid;
   try { valid = new Chess(fen); } catch (e) { fenError.textContent = 'Fix the FEN before playing.'; fenError.style.display = 'block'; return; }
-  playChess = valid;
+  playPositions = [valid.fen()];
+  playCurrent = 0;
   document.getElementById('play-board-wrap').style.display = 'block';
-  if (playCg) { playCg.set({ fen: playChess.fen(), movable: { dests: computeDests(playChess.fen()) } }); return; }
+  if (playCg) { playSync(); return; }
   playCg = Chessground(document.getElementById('play-board'), {
-    fen: playChess.fen(),
+    fen: playPositions[playCurrent],
     coordinates: true,
-    movable: { free: false, color: 'both', showDests: true, dests: computeDests(playChess.fen()), events: { after: onPlayMove } },
+    movable: { free: false, color: 'both', showDests: true, dests: computeDests(playPositions[playCurrent]), events: { after: onPlayMove } },
     draggable: { enabled: true },
   });
 });
 
 function onPlayMove(orig, dest) {
+  const chess = new Chess(playPositions[playCurrent]);
   try {
-    playChess.move({ from: orig, to: dest, promotion: 'q' });
+    chess.move({ from: orig, to: dest, promotion: 'q' });
   } catch (e) {
-    playCg.set({ fen: playChess.fen() });
+    playSync(); // illegal per chess.js — resync to the current position
     return;
   }
-  playCg.set({ fen: playChess.fen(), movable: { dests: computeDests(playChess.fen()) } });
+  playPositions = playPositions.slice(0, playCurrent + 1);
+  playPositions.push(chess.fen());
+  playCurrent++;
+  playSync();
   maybeSuggestPlay();
 }
+
+function playGoStart() { if (playPositions) { playCurrent = 0; playSync(); } }
+function playGoBack() { if (playPositions && playCurrent > 0) { playCurrent--; playSync(); } }
+function playGoForward() { if (playPositions && playCurrent < playPositions.length - 1) { playCurrent++; playSync(); } }
+
+document.getElementById('btn-play-start').addEventListener('click', playGoStart);
+document.getElementById('btn-play-back').addEventListener('click', playGoBack);
+document.getElementById('btn-play-forward').addEventListener('click', playGoForward);
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (!playPositions) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); playGoBack(); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); playGoForward(); }
+  if (e.key === 'Home') { e.preventDefault(); playGoStart(); }
+});
 
 document.getElementById('btn-play-flip').addEventListener('click', () => {
   const cur = playCg.state.orientation;
@@ -338,12 +367,12 @@ const playSuggestToggle = document.getElementById('play-suggest-toggle');
 playSuggestToggle.addEventListener('change', () => maybeSuggestPlay());
 
 async function maybeSuggestPlay() {
-  if (!playSuggestToggle.checked || !playChess) return;
+  if (!playSuggestToggle.checked || !playPositions) return;
   try {
     const resp = await fetch('/api/analyze-position', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: playChess.fen() }),
+      body: JSON.stringify({ fen: playPositions[playCurrent] }),
     });
     const data = await resp.json();
     const shapes = (data.lines || []).filter((l) => l.best_move_uci).map((l, i) => ({

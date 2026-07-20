@@ -107,7 +107,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
-import { computeDests, createPromotionPicker } from '{{ url_for('static', filename='js/chess-board.js') }}';
+import { computeDests, createPromotionPicker, renderEvalLines } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 const pgn = {{ game.pgn|tojson }};
 const chess = new Chess();
@@ -286,21 +286,8 @@ const evalLoadingEl = document.getElementById('eval-loading');
 const RANK_BRUSHES = ['green', 'blue', 'yellow'];
 let suggestAbort = null;
 
-function formatScore(data) {
-  if (data.mate_in != null) return `M${Math.abs(data.mate_in)}`;
-  if (data.score_cp == null) return '—';
-  const pawns = (data.score_cp / 100).toFixed(1);
-  return data.score_cp > 0 ? `+${pawns}` : pawns;
-}
-
 function renderLines(lines) {
-  evalLinesEl.innerHTML = lines.map((l) => `
-    <div class="eval-line">
-      <span class="eval-line-rank rank-${l.rank}"></span>
-      <span class="eval-line-score">${formatScore(l)}</span>
-      <span class="eval-line-moves">${l.preview_san || l.best_move_san || ''}</span>
-    </div>
-  `).join('');
+  renderEvalLines(evalLinesEl, lines);
 
   const shapes = lines
     .filter((l) => l.best_move_uci)

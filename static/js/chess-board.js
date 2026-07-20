@@ -47,3 +47,26 @@ export function createPromotionPicker(pickerEl, onPick) {
     },
   };
 }
+
+// Display string for one /api/analyze-position line: mate score, or pawns
+// with a sign, or an em-dash when neither is present.
+export function formatEvalScore(line) {
+  if (line.mate_in != null) return `M${Math.abs(line.mate_in)}`;
+  if (line.score_cp == null) return '—';
+  const pawns = (line.score_cp / 100).toFixed(1);
+  return line.score_cp > 0 ? `+${pawns}` : pawns;
+}
+
+// Renders /api/analyze-position's `lines` array into the .eval-line markup
+// shared by every analysis panel on the site (rank swatch, score, preview
+// SAN). Board-specific extras (drawing arrows on the board itself) stay in
+// each caller — this only builds the text panel.
+export function renderEvalLines(container, lines) {
+  container.innerHTML = lines.map((l) => `
+    <div class="eval-line">
+      <span class="eval-line-rank rank-${l.rank}"></span>
+      <span class="eval-line-score">${formatEvalScore(l)}</span>
+      <span class="eval-line-moves">${l.preview_san || l.best_move_san || ''}</span>
+    </div>
+  `).join('') || '<span class="stat-sub">No lines returned.</span>';
+}

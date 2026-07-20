@@ -43,7 +43,13 @@
       </div>
     </div>
     <div class="board-controls">
+      {% set parent_crumb = breadcrumb[-2] if breadcrumb|length > 1 else None %}
+      <button id="btn-back" title="Back to parent position"
+              {% if not parent_crumb %}disabled{% endif %}
+              data-href="{{ url_for('opening_explorer', node_id=parent_crumb.node_id, scope=scope) if parent_crumb else '' }}">◀</button>
+      <button id="btn-forward" title="Forward to top move">▶</button>
       <button id="btn-flip" title="Flip board">🔄</button>
+      <button id="btn-analyze" title="Analyze this position with Stockfish">🔬 Analyze</button>
     </div>
   </div>
 
@@ -216,6 +222,36 @@ const cg = Chessground(boardEl, {
 document.getElementById('btn-flip').addEventListener('click', () => {
   orientation = orientation === 'white' ? 'black' : 'white';
   cg.set({ orientation });
+});
+
+document.getElementById('btn-analyze').addEventListener('click', () => {
+  location.href = {{ url_for('position_search', fen=node.fen, autoanalyze=1)|tojson }};
+});
+
+// Back = parent breadcrumb (unambiguous). Forward = whichever child is
+// currently first in the (sortable) Next-moves table — tracks the user's
+// last sort choice, defaulting to most games.
+const btnBack = document.getElementById('btn-back');
+const btnForward = document.getElementById('btn-forward');
+
+function goBack() {
+  if (btnBack.dataset.href) location.href = btnBack.dataset.href;
+}
+function goForward() {
+  const firstRow = document.querySelector('#next-moves-table tbody tr');
+  if (firstRow) location.href = firstRow.dataset.href;
+}
+
+btnBack.addEventListener('click', goBack);
+btnForward.addEventListener('click', goForward);
+if (!document.querySelector('#next-moves-table tbody tr')) {
+  btnForward.disabled = true;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); goForward(); }
 });
 
 initSortableTable(document.getElementById('next-moves-table'));
