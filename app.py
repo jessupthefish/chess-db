@@ -180,6 +180,7 @@ def _opening_tree_children(node_id, scope="mine"):
         db.session.query(
             OpeningNode.node_id,
             OpeningNode.move_san,
+            OpeningNode.move_uci,
             Opening.eco,
             Opening.name,
             func.count(func.distinct(GamePosition.game_id)).label("total"),
@@ -197,6 +198,19 @@ def _opening_tree_children(node_id, scope="mine"):
         .order_by(func.count(func.distinct(GamePosition.game_id)).desc())
         .all()
     )
+
+
+def _opening_scope_total(scope="mine"):
+    """Total game count for a scope (mine: self player's games, pro: the
+    pro/broadcast feed) — the denominator for the opening explorer's 'N of N
+    games included' coverage line."""
+    if scope == "pro":
+        return Game.query.filter(_pro_condition()).count()
+    self_player = _self_player()
+    if not self_player:
+        return 0
+    pid = self_player.player_id
+    return Game.query.filter((Game.white_id == pid) | (Game.black_id == pid)).count()
 
 
 def _opening_tree_games(node_id, scope="mine", page=1, per_page=50):
@@ -238,26 +252,29 @@ def _opening_totals(scope="mine"):
 
 
 def _repertoire_gaps(min_games=5, pro_min_games=20, gap_ratio=10):
-    """Two prep-oriented views built on top of the existing flat per-opening
-    breakdown: (1) openings you have a poor record in (win rate ascending,
-    with a min-game floor so a single loss doesn't dominate), and (2) openings
-    pros play often that you rarely reach (pro game count >= pro_min_games,
-    and either you have zero games in it or pros outnumber you by
-    gap_ratio+)."""
+    """Three prep-oriented views built on top of the existing flat per-opening
+    breakdown: (1) openings you win the most with and (2) openings you have a
+    poor record in (win rate descending / ascending respectively, both with a
+    min-game floor so a single game doesn't dominate), and (3) openings pros
+    play often that you rarely reach (pro game count >= pro_min_games, and
+    either you have zero games in it or pros outnumber you by gap_ratio+)."""
     self_player = _self_player()
+    best_openings = []
     needs_improvement = []
     if self_player:
+        breakdown = []
         for opening_id, eco, name, total, wins, losses, draws in _opening_breakdown(self_player.player_id):
             if total < min_games:
                 continue
             decisive = wins + losses
             win_rate = (wins / decisive * 100) if decisive else None
-            needs_improvement.append({
+            breakdown.append({
                 "opening_id": opening_id, "eco": eco, "name": name,
                 "total": total, "wins": wins, "losses": losses, "draws": draws,
                 "win_rate": win_rate,
             })
-        needs_improvement.sort(key=lambda r: r["win_rate"] if r["win_rate"] is not None else 100)
+        best_openings = sorted(breakdown, key=lambda r: r["win_rate"] if r["win_rate"] is not None else -1, reverse=True)[:20]
+        needs_improvement = sorted(breakdown, key=lambda r: r["win_rate"] if r["win_rate"] is not None else 100)[:20]
 
     mine_totals = _opening_totals("mine")
     pro_totals = _opening_totals("pro")
@@ -283,7 +300,7 @@ def _repertoire_gaps(min_games=5, pro_min_games=20, gap_ratio=10):
             })
     prep_gaps.sort(key=lambda r: r["pro_total"], reverse=True)
 
-    return {"needs_improvement": needs_improvement[:20], "prep_gaps": prep_gaps[:20]}
+    return {"best_openings": best_openings, "needs_improvement": needs_improvement, "prep_gaps": prep_gaps[:20]}
 
 
 @event.listens_for(Engine, "connect")
@@ -1016,6 +1033,7 @@ def create_app():
             scope=scope,
             pagination=pagination,
             self_player=_self_player(),
+            scope_total=_opening_scope_total(scope),
         )
 
     @app.route("/openings/stats")
@@ -1027,6 +1045,7 @@ def create_app():
             "opening_stats.html",
             self_player=self_player,
             top_openings=top_openings,
+            best_openings=gaps["best_openings"],
             needs_improvement=gaps["needs_improvement"],
             prep_gaps=gaps["prep_gaps"],
         )

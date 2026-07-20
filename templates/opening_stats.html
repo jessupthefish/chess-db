@@ -36,6 +36,30 @@
 <p class="empty">No games with a recorded opening yet.</p>
 {% endif %}
 
+<h2>Best</h2>
+<p class="count">Openings with at least 5 games, best win % first.</p>
+{% if best_openings %}
+<table class="game-table">
+  <thead>
+    <tr><th>Opening</th><th>Games</th><th>Wins</th><th>Losses</th><th>Draws</th><th>Win %</th></tr>
+  </thead>
+  <tbody>
+    {% for o in best_openings %}
+    <tr class="clickable" onclick="location.href='{{ url_for('games_list', opening_id=o.opening_id) }}'">
+      <td>{{ o.eco or '' }} {{ o.name or 'Unknown' }}</td>
+      <td>{{ o.total }}</td>
+      <td>{{ o.wins }}</td>
+      <td>{{ o.losses }}</td>
+      <td>{{ o.draws }}</td>
+      <td>{{ '%.1f'|format(o.win_rate) if o.win_rate is not none else '—' }}{{ '%' if o.win_rate is not none }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">Not enough games yet in any single opening (need at least 5).</p>
+{% endif %}
+
 <h2>Needs improvement</h2>
 <p class="count">Openings with at least 5 games, worst win % first.</p>
 {% if needs_improvement %}

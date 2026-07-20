@@ -59,21 +59,11 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+import { computeDests, createPromotionPicker } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 let puzzle = null;
 let solved = false;
 let chess = null;
-let pendingMove = null;
-
-function computeDests(fen) {
-  const tempChess = new Chess(fen);
-  const dests = new Map();
-  for (const m of tempChess.moves({ verbose: true })) {
-    if (!dests.has(m.from)) dests.set(m.from, []);
-    dests.get(m.from).push(m.to);
-  }
-  return dests;
-}
 
 const boardEl = document.getElementById('board');
 const cg = Chessground(boardEl, {
@@ -126,21 +116,8 @@ async function loadNext(excludeCurrent) {
   promptEl.textContent = `${puzzle.side === 'white' ? 'White' : 'Black'} to move — find the best move. (${puzzle.game_label})`;
 }
 
-function showPromotionPicker(orig, dest) {
-  pendingMove = { orig, dest };
-  promoEl.style.display = 'flex';
-}
-function hidePromotionPicker() {
-  promoEl.style.display = 'none';
-  pendingMove = null;
-}
-promoEl.querySelectorAll('button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    if (!pendingMove) return;
-    const { orig, dest } = pendingMove;
-    hidePromotionPicker();
-    commitUserMove(orig, dest, btn.dataset.piece);
-  });
+const promotionPicker = createPromotionPicker(promoEl, (orig, dest, piece) => {
+  commitUserMove(orig, dest, piece);
 });
 
 function onUserMove(orig, dest) {
@@ -148,7 +125,7 @@ function onUserMove(orig, dest) {
   const piece = chess.get(orig);
   const isPromotion = piece && piece.type === 'p' && (dest[1] === '8' || dest[1] === '1');
   if (isPromotion) {
-    showPromotionPicker(orig, dest);
+    promotionPicker.show(orig, dest);
     return;
   }
   commitUserMove(orig, dest, undefined);

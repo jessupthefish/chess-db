@@ -33,7 +33,15 @@
 
 <div class="game-viewer">
   <div class="board-col">
-    <div id="board" class="board"></div>
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+      <div id="promotion-picker" class="promotion-picker" style="display: none;">
+        <button type="button" data-piece="q" title="Queen">♛</button>
+        <button type="button" data-piece="r" title="Rook">♜</button>
+        <button type="button" data-piece="b" title="Bishop">♝</button>
+        <button type="button" data-piece="n" title="Knight">♞</button>
+      </div>
+    </div>
     <div class="board-controls">
       <button id="btn-flip" title="Flip board">🔄</button>
     </div>
@@ -41,32 +49,45 @@
 
   <div class="side-col">
     <h2>Next moves</h2>
+    <p class="count">
+      {{ scope_total }} {{ 'of your' if scope == 'mine' else 'pro/broadcast' }} games in this scope.
+      Click a column header to sort, drag/click a piece to jump to that move.
+    </p>
     {% if children %}
-    <table class="game-table tree-branch-table">
+    <table class="game-table tree-branch-table" id="next-moves-table">
       <thead>
         <tr>
-          <th>Move</th>
-          <th>Games</th>
+          <th data-sort="text" data-key="move">Move</th>
+          <th data-sort="num" data-key="total">Games</th>
           {% if scope == 'pro' %}
-          <th>White wins</th>
-          <th>Black wins</th>
-          <th>Draws</th>
-          <th>White win %</th>
+          <th data-sort="num" data-key="wins">White wins</th>
+          <th data-sort="num" data-key="losses">Black wins</th>
+          <th data-sort="num" data-key="draws">Draws</th>
+          <th data-sort="num" data-key="winrate">White win %</th>
           {% else %}
-          <th>Wins</th>
-          <th>Losses</th>
-          <th>Draws</th>
-          <th>Win %</th>
+          <th data-sort="num" data-key="wins">Wins</th>
+          <th data-sort="num" data-key="losses">Losses</th>
+          <th data-sort="num" data-key="draws">Draws</th>
+          <th data-sort="num" data-key="winrate">Win %</th>
           {% endif %}
-          <th>Avg rating</th>
+          <th data-sort="num" data-key="rating">Avg rating</th>
         </tr>
       </thead>
       <tbody>
-        {% for child_id, move_san, eco, name, total, wins, losses, draws, avg_rating in children %}
+        {% for child_id, move_san, move_uci, eco, name, total, wins, losses, draws, avg_rating in children %}
         {% set decisive = wins + losses %}
         {% set win_rate = ((wins / decisive * 100) if decisive else 0) %}
         <tr class="clickable tree-branch-row"
-            onclick="location.href='{{ url_for('opening_explorer', node_id=child_id, scope=scope) }}'">
+            data-uci="{{ move_uci }}"
+            data-href="{{ url_for('opening_explorer', node_id=child_id, scope=scope) }}"
+            data-move="{{ move_san }}"
+            data-total="{{ total }}"
+            data-wins="{{ wins }}"
+            data-losses="{{ losses }}"
+            data-draws="{{ draws }}"
+            data-winrate="{{ '%.1f'|format(win_rate) }}"
+            data-rating="{{ avg_rating|round|int if avg_rating else 0 }}"
+            onclick="location.href=this.dataset.href">
           <td>
             <strong>{{ move_san }}</strong>
             {% if name %}<span class="opening">{{ eco or '' }} {{ name }}</span>{% endif %}
@@ -129,22 +150,75 @@
 {% if node %}
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
+import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+import { computeDests, createPromotionPicker } from '{{ url_for('static', filename='js/chess-board.js') }}';
+import { initSortableTable } from '{{ url_for('static', filename='js/sortable-table.js') }}';
 
 const fen = {{ node.fen|tojson }};
 let orientation = 'white';
+
+// uci -> href for every child move with games in this scope, so dragging/
+// clicking a piece can jump to that child node exactly like clicking its row.
+const childByUci = new Map();
+document.querySelectorAll('.tree-branch-row').forEach((tr) => {
+  childByUci.set(tr.dataset.uci, tr.dataset.href);
+});
+
+function resync() {
+  cg.set({ fen, movable: { dests: computeDests(fen) } });
+}
+
+function commitMove(orig, dest, promo) {
+  const uci = orig + dest + (promo || '');
+  const href = childByUci.get(uci);
+  if (href) {
+    location.href = href;
+  } else {
+    resync();
+  }
+}
+
+function onUserMove(orig, dest) {
+  const tempChess = new Chess(fen);
+  const candidates = tempChess.moves({ verbose: true }).filter((m) => m.from === orig && m.to === dest);
+  if (candidates.length === 0) {
+    resync();
+    return;
+  }
+  if (candidates.some((m) => m.promotion)) {
+    cg.set({ movable: { dests: new Map() } });
+    promotion.show(orig, dest);
+    return;
+  }
+  commitMove(orig, dest, null);
+}
+
+const promotion = createPromotionPicker(document.getElementById('promotion-picker'), (orig, dest, piece) => {
+  commitMove(orig, dest, piece);
+});
 
 const boardEl = document.getElementById('board');
 const cg = Chessground(boardEl, {
   fen: fen,
   orientation: orientation,
-  viewOnly: true,
   coordinates: true,
+  animation: { duration: 150 },
+  movable: {
+    free: false,
+    color: 'both',
+    showDests: true,
+    dests: computeDests(fen),
+    events: { after: onUserMove },
+  },
+  draggable: { enabled: true },
 });
 
 document.getElementById('btn-flip').addEventListener('click', () => {
   orientation = orientation === 'white' ? 'black' : 'white';
   cg.set({ orientation });
 });
+
+initSortableTable(document.getElementById('next-moves-table'));
 </script>
 {% endif %}
 {% endblock %}

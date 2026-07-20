@@ -60,6 +60,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+import { computeDests } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 const uploadArea = document.getElementById('upload-area');
 const fileInput = document.getElementById('file-input');
@@ -301,16 +302,6 @@ document.getElementById('btn-search').addEventListener('click', (e) => {
 
 let playCg = null;
 let playChess = null;
-
-function computeDests(fen) {
-  const c = new Chess(fen);
-  const dests = new Map();
-  for (const m of c.moves({ verbose: true })) {
-    if (!dests.has(m.from)) dests.set(m.from, []);
-    dests.get(m.from).push(m.to);
-  }
-  return dests;
-}
 
 document.getElementById('btn-play').addEventListener('click', () => {
   const fen = fenField.value.trim();

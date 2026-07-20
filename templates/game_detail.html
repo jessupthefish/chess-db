@@ -107,6 +107,7 @@
 <script type="module">
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+import { computeDests, createPromotionPicker } from '{{ url_for('static', filename='js/chess-board.js') }}';
 
 const pgn = {{ game.pgn|tojson }};
 const chess = new Chess();
@@ -131,26 +132,14 @@ orientation = 'black';
 // current: main-line position index (unchanged navigation model).
 // branch: null, or { forkPly, chess, sans } — a scratch variation off the
 //   main line. Only one active branch at a time (no branch tree).
-// pendingMove: { orig, dest } while the promotion picker is open.
 // moveToken: staleness guard for async eval requests, generalizes the old
 //   `idx !== current` check to also work in branch mode (no index there).
 let current = 0;
 let branch = null;
-let pendingMove = null;
 let moveToken = 0;
 
 function activeFen() {
   return branch ? branch.chess.fen() : positions[current].fen;
-}
-
-function computeDests(fen) {
-  const tempChess = new Chess(fen);
-  const dests = new Map();
-  for (const m of tempChess.moves({ verbose: true })) {
-    if (!dests.has(m.from)) dests.set(m.from, []);
-    dests.get(m.from).push(m.to);
-  }
-  return dests;
 }
 
 const boardEl = document.getElementById('board');
@@ -174,8 +163,7 @@ function goTo(idx) {
   idx = Math.max(0, Math.min(idx, positions.length - 1));
   current = idx;
   branch = null;
-  pendingMove = null;
-  hidePromotionPicker();
+  promotionPicker.hide();
   hideExploringBar();
   const pos = positions[idx];
   cg.set({
@@ -246,22 +234,8 @@ document.getElementById('btn-find-position').addEventListener('click', () => {
 });
 
 const promotionPickerEl = document.getElementById('promotion-picker');
-
-function showPromotionPicker() {
-  promotionPickerEl.style.display = 'flex';
-}
-
-function hidePromotionPicker() {
-  promotionPickerEl.style.display = 'none';
-}
-
-promotionPickerEl.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-piece]');
-  if (!btn || !pendingMove) return;
-  const { orig, dest } = pendingMove;
-  pendingMove = null;
-  hidePromotionPicker();
-  commitUserMove(orig, dest, btn.dataset.piece);
+const promotionPicker = createPromotionPicker(promotionPickerEl, (orig, dest, piece) => {
+  commitUserMove(orig, dest, piece);
 });
 
 function onUserMove(orig, dest) {
@@ -273,9 +247,8 @@ function onUserMove(orig, dest) {
     return;
   }
   if (candidates.some((m) => m.promotion)) {
-    pendingMove = { orig, dest };
     cg.set({ movable: { dests: new Map() } });
-    showPromotionPicker();
+    promotionPicker.show(orig, dest);
     return;
   }
   commitUserMove(orig, dest, null);
@@ -484,10 +457,9 @@ document.getElementById('btn-flip').addEventListener('click', () => {
 // Keyboard navigation
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-  if (e.key === 'Escape' && pendingMove) {
+  if (e.key === 'Escape' && promotionPicker.isPending()) {
     e.preventDefault();
-    pendingMove = null;
-    hidePromotionPicker();
+    promotionPicker.hide();
     resyncBoard();
     return;
   }
