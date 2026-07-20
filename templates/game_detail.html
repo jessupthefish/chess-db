@@ -50,7 +50,13 @@
     <div id="analysis-panel" class="analysis-panel" style="display: none;">
       <p id="analysis-status" class="analysis-status"></p>
       <p id="analysis-acpl" class="analysis-acpl" style="display: none;"></p>
+      <p id="analysis-accuracy" class="analysis-acpl" style="display: none;"></p>
     </div>
+    {% if eval_graph %}
+    <div id="eval-graph-wrap" class="eval-graph-wrap">
+      {{ eval_graph|safe }}
+    </div>
+    {% endif %}
   </div>
 
   <div class="side-col">
@@ -64,6 +70,12 @@
     </div>
 
     <div id="move-list" class="move-list"></div>
+
+    <div class="tags-section comment-section" id="comment-section">
+      <h3>Position comment <span id="comment-ply-label" class="count"></span></h3>
+      <textarea id="comment-box" rows="3" placeholder="Add a study note at this position…"></textarea>
+      <button type="button" id="btn-save-comment">Save comment</button>
+    </div>
 
     <div class="tags-section">
       <h3>Tags</h3>
@@ -111,6 +123,10 @@
 import { Chessground } from 'https://esm.sh/chessground@9.1.1';
 import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
 import { computeDests, createPromotionPicker, renderEvalLines, updateEvalBar, initBoardResize } from '{{ url_for('static', filename='js/chess-board.js') }}';
+
+// {ply: comment} — JSON object keys are always strings, so lookups below
+// always go through String(ply), never a bare integer index.
+const comments = {{ comments|tojson }};
 
 const pgn = {{ game.pgn|tojson }};
 const chess = new Chess();
@@ -191,7 +207,45 @@ function goTo(idx) {
   const active = document.querySelector('.move-list .move.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
   maybeSuggest(pos.fen, idx);
+  showCommentFor(idx);
 }
+
+// ── Study-lite: per-position comments (mainline only — a branch/scratch
+// variation has no stable ply address, so the comment box is disabled
+// while exploring one; see showExploringBar/hideExploringBar). ─────────────
+
+const commentSection = document.getElementById('comment-section');
+const commentBox = document.getElementById('comment-box');
+const commentPlyLabel = document.getElementById('comment-ply-label');
+const btnSaveComment = document.getElementById('btn-save-comment');
+
+function showCommentFor(idx) {
+  commentSection.style.display = '';
+  commentBox.disabled = false;
+  commentBox.value = comments[String(idx)] || '';
+  commentPlyLabel.textContent = idx === 0 ? '(start)' : `(after move ${history[idx - 1].san})`;
+}
+
+function disableCommentBox() {
+  commentSection.style.display = 'none';
+}
+
+btnSaveComment.addEventListener('click', async () => {
+  const text = commentBox.value.trim();
+  const resp = await fetch('/api/games/{{ game.game_id }}/comment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ply: current, comment: text }),
+  });
+  if (!resp.ok) return;
+  if (text) {
+    comments[String(current)] = text;
+  } else {
+    delete comments[String(current)];
+  }
+  const moveEl = moveListEl.querySelector(`.move[data-idx="${current}"]`);
+  if (moveEl) moveEl.classList.toggle('has-comment', !!text);
+});
 
 // ── Interactive board: user moves, scratch variations, promotion ─────────
 
@@ -230,6 +284,7 @@ const exploringLineEl = document.getElementById('exploring-line');
 function showExploringBar() {
   exploringBarEl.style.display = 'flex';
   exploringLineEl.textContent = branchLineText();
+  disableCommentBox();
 }
 
 function hideExploringBar() {
@@ -367,11 +422,19 @@ for (let i = 0; i < history.length; i += 2) {
 }
 moveListEl.innerHTML = html;
 
+// Mark which moves already have a saved comment
+Object.keys(comments).forEach((idxStr) => {
+  const el = moveListEl.querySelector(`.move[data-idx="${idxStr}"]`);
+  if (el) el.classList.add('has-comment');
+});
+
 // Click moves
 moveListEl.addEventListener('click', (e) => {
   const move = e.target.closest('.move');
   if (move) goTo(parseInt(move.dataset.idx));
 });
+
+showCommentFor(0);
 
 // ── On-demand analysis ──────────────────────────────────────────────────
 
@@ -379,6 +442,7 @@ const analyzeBtn = document.getElementById('btn-analyze');
 const panel = document.getElementById('analysis-panel');
 const statusEl = document.getElementById('analysis-status');
 const acplEl = document.getElementById('analysis-acpl');
+const accuracyEl = document.getElementById('analysis-accuracy');
 let pollTimer = null;
 
 function applyAnnotations(moves) {
@@ -410,8 +474,14 @@ function renderStatus(data) {
       acplEl.style.display = 'block';
       acplEl.textContent = `ACPL — White: ${data.white_acpl != null ? data.white_acpl.toFixed(0) : '—'}, Black: ${data.black_acpl != null ? data.black_acpl.toFixed(0) : '—'}`;
     }
+    if (data.white_accuracy != null || data.black_accuracy != null) {
+      accuracyEl.style.display = 'block';
+      accuracyEl.textContent = `Accuracy — White: ${data.white_accuracy != null ? data.white_accuracy.toFixed(1) + '%' : '—'}, Black: ${data.black_accuracy != null ? data.black_accuracy.toFixed(1) + '%' : '—'}`;
+    }
     applyAnnotations(data.moves || []);
+    const justFinished = pollTimer !== null;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (justFinished) { location.reload(); return; } // pick up the server-rendered eval graph
   } else if (data.status === 'error') {
     statusEl.textContent = `Analysis failed: ${data.error || 'unknown error'}`;
     analyzeBtn.disabled = false;
@@ -446,6 +516,11 @@ analyzeBtn.addEventListener('click', async () => {
 
 // One status check on load, in case this game was already analyzed before.
 checkStatus();
+
+// Eval graph: clicking a point jumps the board straight to that ply.
+document.querySelectorAll('.eval-graph-point').forEach((el) => {
+  el.addEventListener('click', () => goTo(parseInt(el.dataset.ply, 10)));
+});
 
 // Buttons
 document.getElementById('btn-start').addEventListener('click', () => goTo(0));

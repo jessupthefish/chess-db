@@ -10,19 +10,35 @@
 <h1>Opening Explorer</h1>
 
 <div class="scope-toggle">
-  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope='mine') }}"
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, **dict(filter_args, scope='mine')) }}"
      class="active-filter-pill {{ 'active' if scope == 'mine' }}">Mine</a>
-  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope='pro') }}"
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, **dict(filter_args, scope='pro')) }}"
      class="active-filter-pill {{ 'active' if scope == 'pro' }}">Pro games</a>
   <a href="{{ url_for('opening_stats') }}" class="btn-link">Stats &amp; prep gaps &rsaquo;</a>
 </div>
 
+<form method="get" action="{{ url_for('opening_explorer', node_id=node.node_id) }}" class="filters opening-filters">
+  <input type="hidden" name="scope" value="{{ scope }}">
+  <select name="time_class" onchange="this.form.submit()">
+    <option value="">All time controls</option>
+    {% for tc in time_classes %}
+    <option value="{{ tc }}" {{ 'selected' if time_class == tc }}>{{ tc|capitalize }}</option>
+    {% endfor %}
+  </select>
+  <select name="rating_band" onchange="this.form.submit()">
+    <option value="">All ratings</option>
+    {% for key, band in rating_bands.items() %}
+    <option value="{{ key }}" {{ 'selected' if rating_band == key }}>{{ band[0] }}</option>
+    {% endfor %}
+  </select>
+</form>
+
 <div class="breadcrumb">
-  <a href="{{ url_for('opening_explorer', node_id=breadcrumb[0].node_id, scope=scope) }}"
+  <a href="{{ url_for('opening_explorer', node_id=breadcrumb[0].node_id, **filter_args) }}"
      class="{{ 'active' if breadcrumb[0].node_id == node.node_id }}">Start</a>
   {% for n in breadcrumb[1:] %}
     {% if n.ply is odd %}<span class="move-number">{{ ((n.ply + 1) // 2) }}.</span>{% endif %}
-    <a href="{{ url_for('opening_explorer', node_id=n.node_id, scope=scope) }}"
+    <a href="{{ url_for('opening_explorer', node_id=n.node_id, **filter_args) }}"
        class="{{ 'active' if n.node_id == node.node_id }}">{{ n.move_san }}</a>
   {% endfor %}
 </div>
@@ -46,7 +62,7 @@
       {% set parent_crumb = breadcrumb[-2] if breadcrumb|length > 1 else None %}
       <button id="btn-back" title="Back to parent position"
               {% if not parent_crumb %}disabled{% endif %}
-              data-href="{{ url_for('opening_explorer', node_id=parent_crumb.node_id, scope=scope) if parent_crumb else '' }}">◀</button>
+              data-href="{{ url_for('opening_explorer', node_id=parent_crumb.node_id, **filter_args) if parent_crumb else '' }}">◀</button>
       <button id="btn-forward" title="Forward to top move">▶</button>
       <button id="btn-flip" title="Flip board">🔄</button>
       <button id="btn-analyze" title="Analyze this position with Stockfish">🔬 Analyze</button>
@@ -85,7 +101,7 @@
         {% set win_rate = ((wins / decisive * 100) if decisive else 0) %}
         <tr class="clickable tree-branch-row"
             data-uci="{{ move_uci }}"
-            data-href="{{ url_for('opening_explorer', node_id=child_id, scope=scope) }}"
+            data-href="{{ url_for('opening_explorer', node_id=child_id, **filter_args) }}"
             data-move="{{ move_san }}"
             data-total="{{ total }}"
             data-wins="{{ wins }}"
@@ -138,11 +154,11 @@
 </table>
 <div class="pagination">
   {% if pagination.has_prev %}
-  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope=scope, page=pagination.prev_num) }}">&larr; Prev</a>
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, page=pagination.prev_num, **filter_args) }}">&larr; Prev</a>
   {% endif %}
   <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
   {% if pagination.has_next %}
-  <a href="{{ url_for('opening_explorer', node_id=node.node_id, scope=scope, page=pagination.next_num) }}">Next &rarr;</a>
+  <a href="{{ url_for('opening_explorer', node_id=node.node_id, page=pagination.next_num, **filter_args) }}">Next &rarr;</a>
   {% endif %}
 </div>
 {% else %}

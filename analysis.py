@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 from datetime import datetime, timezone
 
 import chess
@@ -39,6 +40,22 @@ def classify(cp_loss: int) -> str | None:
     if cp_loss > INACCURACY_CP:
         return "inaccuracy"
     return None
+
+
+# Lichess's own published win%/accuracy curves. Kept in sync with the
+# identical win_percent formula in static/js/chess-board.js's updateEvalBar
+# so the server (accuracy, eval graph) and client (eval bar) always agree.
+# Accuracy is an approximation of lichess's real metric — a simple per-move
+# mean here, not lichess's fancier volatility-weighted blend — same
+# "not a literal claim of exactness" caveat this project already documents
+# for ACPL (see docs/ARCHITECTURE.md).
+def win_percent(cp: float) -> float:
+    """White-POV win% (0-100) from a white-POV, mate-scaled centipawn score."""
+    return 50 + 50 * (2 / (1 + math.exp(-0.00368 * cp)) - 1)
+
+
+def move_accuracy(win_percent_loss: float) -> float:
+    return max(0.0, min(100.0, 103.1668 * math.exp(-0.04354 * win_percent_loss) - 3.1669))
 
 
 LINE_PREVIEW_PLIES = 10  # ~5 full moves, lichess-style preview length
@@ -140,6 +157,7 @@ def run_full_analysis(app, game_id: int) -> None:
                         ))
 
                 white_losses, black_losses = [], []
+                white_accuracies, black_accuracies = [], []
                 for i in range(1, len(positions)):
                     before, after = evals[i - 1][0], evals[i][0]
                     mover_white = positions[i - 1].turn == chess.WHITE
@@ -148,6 +166,10 @@ def run_full_analysis(app, game_id: int) -> None:
                     cp_loss = (before_n - after_n) if mover_white else (after_n - before_n)
                     cp_loss = max(0, cp_loss)
                     (white_losses if mover_white else black_losses).append(cp_loss)
+
+                    win_before, win_after = win_percent(before_n), win_percent(after_n)
+                    win_loss = max(0.0, (win_before - win_after) if mover_white else (win_after - win_before))
+                    (white_accuracies if mover_white else black_accuracies).append(move_accuracy(win_loss))
 
                     db.session.add(MoveEval(
                         game_id=game_id,
@@ -164,6 +186,8 @@ def run_full_analysis(app, game_id: int) -> None:
 
             row.white_acpl = sum(white_losses) / len(white_losses) if white_losses else None
             row.black_acpl = sum(black_losses) / len(black_losses) if black_losses else None
+            row.white_accuracy = sum(white_accuracies) / len(white_accuracies) if white_accuracies else None
+            row.black_accuracy = sum(black_accuracies) / len(black_accuracies) if black_accuracies else None
             row.analyzed_at = datetime.now(timezone.utc)
             db.session.commit()
             log.info("analysis done: game %s (%d plies)", game_id, len(positions) - 1)

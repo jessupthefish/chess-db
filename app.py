@@ -23,6 +23,7 @@ from models import (
     Event,
     Game,
     GameAnalysis,
+    GameComment,
     GamePosition,
     MoveEval,
     MoveEvalLine,
@@ -154,7 +155,60 @@ def _pro_games_query():
     return Game.query.filter(_pro_condition())
 
 
-def _opening_tree_children(node_id, scope="mine"):
+# Rating-band presets for the opening explorer's filter bar — a small fixed
+# set of dropdown choices rather than free-text min/max, matching this
+# project's existing preference for simple dropdown filters.
+RATING_BANDS = {
+    "under1000": ("Under 1000", None, 999),
+    "1000-1400": ("1000–1400", 1000, 1400),
+    "1400-1800": ("1400–1800", 1400, 1800),
+    "1800plus": ("1800+", 1800, None),
+}
+OPENING_TIME_CLASSES = ["bullet", "blitz", "rapid", "classical", "daily"]
+
+
+def _opening_filter_args():
+    """Reads scope/time_class/rating_band from the query string (validated,
+    unset filters omitted) — safe to splat into any
+    url_for('opening_explorer', node_id=..., **_opening_filter_args()) call
+    so every internal link preserves whatever filters are currently active."""
+    scope = request.args.get("scope", "mine")
+    if scope not in ("mine", "pro"):
+        scope = "mine"
+    args = {"scope": scope}
+    time_class = request.args.get("time_class")
+    if time_class in OPENING_TIME_CLASSES:
+        args["time_class"] = time_class
+    rating_band = request.args.get("rating_band")
+    if rating_band in RATING_BANDS:
+        args["rating_band"] = rating_band
+    return args
+
+
+def _opening_scope_filter(scope, rating_expr, time_class=None, rating_band=None):
+    """Extra WHERE conditions shared by every opening-explorer query:
+    optional time-class match and rating-band range, applied against
+    whichever rating_expr the caller already built for this scope (self's
+    own rating in 'mine', white/black average in 'pro')."""
+    conditions = []
+    if time_class:
+        conditions.append(Game.time_class == time_class)
+    if rating_band and rating_band in RATING_BANDS:
+        _, lo, hi = RATING_BANDS[rating_band]
+        if lo is not None:
+            conditions.append(rating_expr >= lo)
+        if hi is not None:
+            conditions.append(rating_expr <= hi)
+    return conditions
+
+
+def _opening_rating_expr(scope, pid=None):
+    if scope == "pro":
+        return (Game.white_rating + Game.black_rating) / 2.0
+    return case((Game.white_id == pid, Game.white_rating), else_=Game.black_rating)
+
+
+def _opening_tree_children(node_id, scope="mine", time_class=None, rating_band=None):
     """Per-child-move aggregated stats for an opening-tree node: game count,
     result breakdown, and avg rating, scoped to either the self player's games
     or the pro/broadcast feed. Mirrors _opening_breakdown's color-aware case()
@@ -164,7 +218,7 @@ def _opening_tree_children(node_id, scope="mine"):
         scope_filter = _pro_condition()
         win_case = case((Game.result == "1-0", 1), else_=0)   # White win
         loss_case = case((Game.result == "0-1", 1), else_=0)  # Black win
-        rating_expr = (Game.white_rating + Game.black_rating) / 2.0
+        rating_expr = _opening_rating_expr(scope)
     else:
         self_player = _self_player()
         if not self_player:
@@ -172,9 +226,10 @@ def _opening_tree_children(node_id, scope="mine"):
         pid = self_player.player_id
         scope_filter = (Game.white_id == pid) | (Game.black_id == pid)
         win_case, loss_case, _ = stats.result_cases(pid)
-        rating_expr = case((Game.white_id == pid, Game.white_rating), else_=Game.black_rating)
+        rating_expr = _opening_rating_expr(scope, pid)
 
     draw_case = case((Game.result == "1/2-1/2", 1), else_=0)
+    extra_filters = _opening_scope_filter(scope, rating_expr, time_class, rating_band)
 
     return (
         db.session.query(
@@ -194,26 +249,36 @@ def _opening_tree_children(node_id, scope="mine"):
         .outerjoin(Opening, Opening.opening_id == OpeningNode.opening_id)
         .filter(OpeningNode.parent_id == node_id)
         .filter(scope_filter)
+        .filter(*extra_filters)
         .group_by(OpeningNode.node_id)
         .order_by(func.count(func.distinct(GamePosition.game_id)).desc())
         .all()
     )
 
 
-def _opening_scope_total(scope="mine"):
+def _opening_scope_total(scope="mine", time_class=None, rating_band=None):
     """Total game count for a scope (mine: self player's games, pro: the
     pro/broadcast feed) — the denominator for the opening explorer's 'N of N
-    games included' coverage line."""
+    games included' coverage line. Respects the same filters as the rest of
+    the explorer so the count stays accurate when a filter is active."""
     if scope == "pro":
-        return Game.query.filter(_pro_condition()).count()
+        rating_expr = _opening_rating_expr(scope)
+        extra_filters = _opening_scope_filter(scope, rating_expr, time_class, rating_band)
+        return Game.query.filter(_pro_condition()).filter(*extra_filters).count()
     self_player = _self_player()
     if not self_player:
         return 0
     pid = self_player.player_id
-    return Game.query.filter((Game.white_id == pid) | (Game.black_id == pid)).count()
+    rating_expr = _opening_rating_expr(scope, pid)
+    extra_filters = _opening_scope_filter(scope, rating_expr, time_class, rating_band)
+    return (
+        Game.query.filter((Game.white_id == pid) | (Game.black_id == pid))
+        .filter(*extra_filters)
+        .count()
+    )
 
 
-def _opening_tree_games(node_id, scope="mine", page=1, per_page=50):
+def _opening_tree_games(node_id, scope="mine", page=1, per_page=50, time_class=None, rating_band=None):
     """Paginated list of games that passed through a given opening-tree node,
     scoped like _opening_tree_children. Returns None if scope='mine' and no
     self player is set (mirrors the dashboard's no-self-player guard)."""
@@ -223,12 +288,16 @@ def _opening_tree_games(node_id, scope="mine", page=1, per_page=50):
         .filter(GamePosition.node_id == node_id)
     )
     if scope == "pro":
+        rating_expr = _opening_rating_expr(scope)
         q = q.filter(_pro_condition())
     else:
         self_player = _self_player()
         if not self_player:
             return None
-        q = q.filter((Game.white_id == self_player.player_id) | (Game.black_id == self_player.player_id))
+        pid = self_player.player_id
+        rating_expr = _opening_rating_expr(scope, pid)
+        q = q.filter((Game.white_id == pid) | (Game.black_id == pid))
+    q = q.filter(*_opening_scope_filter(scope, rating_expr, time_class, rating_band))
     q = q.order_by(Game.played_at.desc())
     return q.paginate(page=page, per_page=per_page, error_out=False)
 
@@ -521,7 +590,36 @@ def create_app():
     def game_detail(game_id):
         game = Game.query.get_or_404(game_id)
         tags = Tag.query.order_by(Tag.name).all()
-        return render_template("game_detail.html", game=game, all_tags=tags)
+        comments = {
+            c.ply: c.comment for c in GameComment.query.filter_by(game_id=game_id).all()
+        }
+
+        eval_graph = None
+        analysis_row = GameAnalysis.query.get(game_id)
+        if analysis_row and analysis_row.analyzed_at:
+            import analysis as analysis_mod
+            import charts
+
+            def win_pct(score_cp, mate_in):
+                if mate_in is not None:
+                    return 100.0 if mate_in > 0 else 0.0
+                if score_cp is None:
+                    return 50.0
+                return analysis_mod.win_percent(score_cp)
+
+            move_evals = MoveEval.query.filter_by(game_id=game_id).order_by(MoveEval.ply).all()
+            points = [(0, 50.0)] + [(m.ply, win_pct(m.score_cp, m.mate_in)) for m in move_evals]
+            if len(points) >= 2:
+                eval_graph = charts.eval_graph_svg(points, aria_label="Evaluation over the course of the game")
+
+        return render_template(
+            "game_detail.html",
+            game=game,
+            all_tags=tags,
+            comments=comments,
+            analysis_row=analysis_row,
+            eval_graph=eval_graph,
+        )
 
     @app.route("/games/<int:game_id>/notes", methods=["POST"])
     def update_notes(game_id):
@@ -572,6 +670,8 @@ def create_app():
             status="done",
             white_acpl=row.white_acpl,
             black_acpl=row.black_acpl,
+            white_accuracy=row.white_accuracy,
+            black_accuracy=row.black_accuracy,
             moves=[
                 {
                     "ply": m.ply,
@@ -684,6 +784,30 @@ def create_app():
             action = "added"
         db.session.commit()
         return jsonify(action=action, tag_id=tag.tag_id)
+
+    @app.route("/api/games/<int:game_id>/comment", methods=["POST"])
+    def upsert_game_comment(game_id):
+        """Study-lite: set (or, given an empty string, delete) the text note
+        pinned to one ply of this game. {ply, comment}."""
+        Game.query.get_or_404(game_id)
+        ply = request.json.get("ply")
+        text = (request.json.get("comment") or "").strip()
+        if ply is None:
+            return jsonify(error="ply required"), 400
+
+        existing = GameComment.query.filter_by(game_id=game_id, ply=ply).first()
+        if not text:
+            if existing:
+                db.session.delete(existing)
+                db.session.commit()
+            return jsonify(ply=ply, comment=None)
+
+        if existing:
+            existing.comment = text
+        else:
+            db.session.add(GameComment(game_id=game_id, ply=ply, comment=text))
+        db.session.commit()
+        return jsonify(ply=ply, comment=text)
 
     @app.route("/api/players/<int:player_id>/tags", methods=["POST"])
     def toggle_player_tag(player_id):
@@ -1003,15 +1127,15 @@ def create_app():
         root = OpeningNode.query.filter_by(parent_id=None).first()
         if not root:
             return render_template("opening_explorer.html", node=None)
-        scope = request.args.get("scope", "mine")
-        return redirect(url_for("opening_explorer", node_id=root.node_id, scope=scope))
+        return redirect(url_for("opening_explorer", node_id=root.node_id, **_opening_filter_args()))
 
     @app.route("/openings/<int:node_id>")
     def opening_explorer(node_id):
         node = OpeningNode.query.get_or_404(node_id)
-        scope = request.args.get("scope", "mine")
-        if scope not in ("mine", "pro"):
-            scope = "mine"
+        filter_args = _opening_filter_args()
+        scope = filter_args["scope"]
+        time_class = filter_args.get("time_class")
+        rating_band = filter_args.get("rating_band")
 
         breadcrumb = []
         n = node
@@ -1020,10 +1144,12 @@ def create_app():
             n = n.parent
         breadcrumb.reverse()
 
-        children = _opening_tree_children(node_id, scope=scope)
+        children = _opening_tree_children(node_id, scope=scope, time_class=time_class, rating_band=rating_band)
 
         page = request.args.get("page", 1, type=int)
-        pagination = _opening_tree_games(node_id, scope=scope, page=page)
+        pagination = _opening_tree_games(
+            node_id, scope=scope, page=page, time_class=time_class, rating_band=rating_band
+        )
 
         return render_template(
             "opening_explorer.html",
@@ -1031,9 +1157,14 @@ def create_app():
             breadcrumb=breadcrumb,
             children=children,
             scope=scope,
+            time_class=time_class,
+            rating_band=rating_band,
+            time_classes=OPENING_TIME_CLASSES,
+            rating_bands=RATING_BANDS,
+            filter_args=filter_args,
             pagination=pagination,
             self_player=_self_player(),
-            scope_total=_opening_scope_total(scope),
+            scope_total=_opening_scope_total(scope, time_class=time_class, rating_band=rating_band),
         )
 
     @app.route("/openings/stats")

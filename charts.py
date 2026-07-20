@@ -144,6 +144,61 @@ def line_chart_svg(points, width=720, height=240, aria_label=""):
 </svg>'''
 
 
+def eval_graph_svg(points, width=720, height=160, aria_label=""):
+    """Lichess-style per-ply win% area chart: a thin ribbon symmetric around
+    the 50% (even) centerline, light fill above (white advantage) / dark
+    fill below (black advantage). `points`: [(ply, win_percent), ...] in ply
+    order, win_percent already white-POV 0-100 (see analysis.py's
+    win_percent()). Each point's hover target carries data-ply so the caller
+    can wire click-to-jump (see game_detail.html)."""
+    if len(points) < 2:
+        return ""
+    pad = 6
+    plot_w = width - 2 * pad
+    plot_h = height - 2 * pad
+
+    def x_at(i):
+        return pad + i / (len(points) - 1) * plot_w
+
+    def y_at(v):
+        return pad + (1 - v / 100) * plot_h
+
+    coords = [(x_at(i), y_at(v)) for i, (_, v) in enumerate(points)]
+    center_y = y_at(50)
+    poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+
+    # Two clamped-area polygons against the centerline — one collapses to a
+    # flat line wherever the curve is on the other side, so together they
+    # split the fill into white-advantage / black-advantage regions without
+    # needing real per-segment clipping.
+    upper = [(x_at(i), y_at(max(v, 50))) for i, (_, v) in enumerate(points)]
+    upper_poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in upper)
+    white_area = f"{upper[0][0]:.1f},{center_y:.1f} {upper_poly} {upper[-1][0]:.1f},{center_y:.1f}"
+
+    lower = [(x_at(i), y_at(min(v, 50))) for i, (_, v) in enumerate(points)]
+    lower_poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in lower)
+    black_area = f"{lower[0][0]:.1f},{center_y:.1f} {lower_poly} {lower[-1][0]:.1f},{center_y:.1f}"
+
+    hovers = "".join(
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="transparent" class="eval-graph-point" '
+        f'data-ply="{ply}"><title>ply {ply}: {v:.0f}%</title></circle>'
+        for (x, y), (ply, v) in zip(coords, points)
+    )
+
+    # A neutral mid-gray backdrop so both fills read as contrast against it
+    # (lighter-than-backdrop for white's advantage, darker for black's) —
+    # without it, the dark fill was nearly invisible against this site's
+    # own dark theme, since it was blending straight into the page background.
+    return f'''<svg viewBox="0 0 {width} {height}" class="chart eval-graph" role="img" aria-label="{escape(aria_label)}" preserveAspectRatio="none">
+  <rect x="0" y="0" width="{width}" height="{height}" fill="#6b6b6b" />
+  <line x1="{pad}" y1="{center_y:.1f}" x2="{pad + plot_w}" y2="{center_y:.1f}" class="chart-ref" stroke-dasharray="3,3" />
+  <polygon points="{white_area}" fill="#f0f0f0" />
+  <polygon points="{black_area}" fill="#242424" />
+  <polyline points="{poly}" fill="none" stroke="#1a1a1e" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
+  {hovers}
+</svg>'''
+
+
 def _top_rounded_bar(x, y, w, h, r=4):
     """Bar path with a 4px rounded data-end and a square baseline."""
     if h <= r:

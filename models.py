@@ -137,6 +137,26 @@ class Collection(db.Model):
     games = db.relationship("Game", secondary=collection_game, backref="collections")
 
 
+class GameComment(db.Model):
+    """Study-lite: a text note pinned to one position in a game, addressed by
+    ply using the same convention as MoveEval/game_detail.html's positions[]
+    array (0 = starting position). Mainline-only — deliberately does not
+    attempt saved variations/sidelines, see BUILD_LOG for the scoping call."""
+    __tablename__ = "game_comment"
+
+    comment_id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey("game.game_id"), nullable=False, index=True)
+    ply = db.Column(db.Integer, nullable=False)
+    comment = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    game = db.relationship("Game", backref="comments")
+
+    __table_args__ = (db.UniqueConstraint("game_id", "ply", name="uq_comment_game_ply"),)
+
+
 # ── sync bookkeeping ─────────────────────────────────────────────────────
 
 class ArchiveCache(db.Model):
@@ -165,6 +185,8 @@ class GameAnalysis(db.Model):
     analyzed_at = db.Column(db.DateTime)
     white_acpl = db.Column(db.Float)
     black_acpl = db.Column(db.Float)
+    white_accuracy = db.Column(db.Float)  # lichess-style win%-based accuracy, NOT literally ACPL — see analysis.py
+    black_accuracy = db.Column(db.Float)
     error = db.Column(db.String(500))
 
     game = db.relationship("Game", backref=db.backref("analysis", uselist=False))
