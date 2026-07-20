@@ -493,3 +493,17 @@ if that limitation ever becomes annoying in practice.
   /games/2 (200), /games/2/analysis (status done, 3 lines on move 1),
   /api/analyze-position cache-hit branch (3 lines, matching shape to the fresh-
   engine-call branch), / (200), /openings/stats (200) against the live service.
+- 2026-07-20: Phases 10-14 (stats hub, collections, PGN import, position search,
+  blunder puzzles) deployed from the Mac to spaceship. rsync + `git reset` to
+  origin/master, `systemctl --user restart chess-db`, full 14-route smoke test
+  passed live. `flask build-position-index` run against the live 24,269-game
+  production DB (~2 min, 0 failures), then live-verified via curl that
+  /search/position finds all 24,269 games at the start position.
+  Note: mid-deploy the Mac's Wi-Fi dropped and spaceship.local stopped
+  resolving via mDNS (IPv4 A-record specifically — IPv6 AAAA still resolved)
+  even after Wi-Fi came back; worked around by connecting directly to
+  spaceship's documented LAN IP (10.0.0.106, per this file's environment
+  facts), verified it was genuinely spaceship via both `hostname` over SSH and
+  by curling the live chess-db dashboard on port 8000 before accepting the new
+  SSH host key (StrictHostKeyChecking=accept-new, since no TTY was available
+  to confirm interactively) — not a security issue, just a stale mDNS cache.
