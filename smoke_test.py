@@ -40,6 +40,7 @@ def main() -> int:
         ("/search/position", (200,)),
         ("/games/import", (200,)),
         ("/puzzles", (200, 302)),
+        ("/import/board-image", (200,)),
     ]
     if game_id is not None:
         routes.append((f"/games/{game_id}", (200,)))

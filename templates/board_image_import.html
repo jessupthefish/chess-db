@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% block title %}Import board screenshot — Chess DB{% endblock %}
+{% block content %}
+<h1>Import a board screenshot</h1>
+<p class="stat-sub">Upload or paste (Ctrl/Cmd+V) a screenshot of a chess board. The position is recognized automatically — check it against the screenshot below and fix anything before analyzing or playing on.</p>
+
+<div id="upload-area" class="upload-area">
+  <input type="file" id="file-input" accept="image/*" hidden>
+  <p>Drop an image, <button type="button" id="browse-btn">choose a file</button>, or paste a screenshot anywhere on this page.</p>
+</div>
+
+<div id="recognize-status" class="stat-sub" style="display: none;"></div>
+
+<div id="editor-area" style="display: none;">
+  <div class="board-editor-layout">
+    <div class="board-col">
+      <div id="grid-board" class="grid-board"></div>
+      <div class="editor-palette" id="editor-palette"></div>
+      <p class="stat-sub">Click a palette piece, then click a square to place it. Right-click a square (or select the eraser first) to clear it.</p>
+    </div>
+
+    <div class="side-col">
+      <div class="fen-editor-panel">
+        <h3>Position</h3>
+        <label class="stat-sub">FEN</label>
+        <input type="text" id="fen-field" class="fen-field-input" spellcheck="false">
+        <div class="side-to-move-row">
+          <label><input type="radio" name="stm" value="w" checked> White to move</label>
+          <label><input type="radio" name="stm" value="b"> Black to move</label>
+        </div>
+        <p id="fen-error" class="fen-error" style="display: none;"></p>
+      </div>
+
+      <div class="editor-actions">
+        <button type="button" id="btn-analyze">🔬 Analyze position</button>
+        <button type="button" id="btn-play">▶ Play from here</button>
+        <a id="btn-search" href="#">🔍 Find in my games</a>
+      </div>
+
+      <div id="analyze-result" class="eval-panel" style="display: none;">
+        <div id="analyze-lines" class="eval-lines"></div>
+      </div>
+
+      <div id="play-board-wrap" style="display: none;">
+        <div id="play-board" class="board"></div>
+        <div class="board-controls">
+          <button type="button" id="btn-play-flip">🔄 Flip</button>
+        </div>
+        <label class="suggest-toggle">
+          <input type="checkbox" id="play-suggest-toggle">
+          Live move suggestion
+        </label>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { Chessground } from 'https://esm.sh/chessground@9.1.1';
+import { Chess } from 'https://esm.sh/chess.js@1.0.0-beta.8';
+
+const uploadArea = document.getElementById('upload-area');
+const fileInput = document.getElementById('file-input');
+const browseBtn = document.getElementById('browse-btn');
+const statusEl = document.getElementById('recognize-status');
+const editorArea = document.getElementById('editor-area');
+const fenField = document.getElementById('fen-field');
+const fenError = document.getElementById('fen-error');
+
+browseBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) recognizeImage(fileInput.files[0]);
+});
+uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) recognizeImage(file);
+});
+document.addEventListener('paste', (e) => {
+  const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'));
+  if (item) recognizeImage(item.getAsFile());
+});
+
+async function recognizeImage(file) {
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Recognizing…';
+  const formData = new FormData();
+  formData.append('image', file);
+  let data;
+  try {
+    const resp = await fetch('/api/board-image/recognize', { method: 'POST', body: formData });
+    data = await resp.json();
+  } catch (e) {
+    statusEl.textContent = 'Recognition request failed — set up the board manually below.';
+    openEditor(null);
+    return;
+  }
+
+  if (data.error) {
+    statusEl.textContent = `Recognition failed: ${data.error}`;
+    openEditor(null);
+    return;
+  }
+  if (!data.fen) {
+    statusEl.textContent = 'Could not recognize a position from that image — set it up manually below.';
+    openEditor(null);
+    return;
+  }
+  const methodLabel = data.method === 'claude' ? 'Claude vision' : 'template match';
+  const confPct = Math.round((data.confidence || 0) * 100);
+  statusEl.textContent = `Recognized via ${methodLabel} (${confPct}% confidence)${data.theme ? ' — ' + data.theme + ' theme' : ''}. Check it against your screenshot below.`;
+  openEditor(data.fen, data.side_to_move);
+}
+
+// ── 8x8 editor board — plain HTML/CSS grid, not chessground.
+// Chessground is built around legal-move play (drag a piece along
+// computed dests); it isn't a natural fit for freely placing arbitrary
+// pieces on arbitrary squares. A grid of plain clickable cells is simpler
+// and more reliable for this. Chessground is reused, unmodified, for the
+// "Play from here" board below, where it's doing what it's designed for.
+
+const PIECES = ['K', 'Q', 'R', 'B', 'N', 'P'];
+const GLYPHS = {
+  wK: '♔', wQ: '♕', wR: '♖', wB: '♗', wN: '♘', wP: '♙',
+  bK: '♚', bQ: '♛', bR: '♜', bB: '♝', bN: '♞', bP: '♟',
+};
+const palette = document.getElementById('editor-palette');
+const gridBoard = document.getElementById('grid-board');
+let selectedPiece = null; // 'wP', 'bK', ... or null (eraser)
+let board = {}; // { 'e4': 'wP', ... }
+let cellEls = {}; // { 'e4': <div> }
+
+function buildPalette() {
+  palette.innerHTML = '';
+  for (const color of ['w', 'b']) {
+    const row = document.createElement('div');
+    row.className = 'palette-row';
+    for (const p of PIECES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'palette-btn';
+      btn.dataset.piece = color + p;
+      btn.textContent = GLYPHS[color + p];
+      btn.addEventListener('click', () => selectPaletteItem(color + p));
+      row.appendChild(btn);
+    }
+    palette.appendChild(row);
+  }
+  const eraseBtn = document.createElement('button');
+  eraseBtn.type = 'button';
+  eraseBtn.className = 'palette-btn palette-erase';
+  eraseBtn.textContent = '🗑';
+  eraseBtn.title = 'Erase';
+  eraseBtn.addEventListener('click', () => selectPaletteItem(null));
+  palette.appendChild(eraseBtn);
+}
+
+function selectPaletteItem(piece) {
+  selectedPiece = piece;
+  palette.querySelectorAll('.palette-btn').forEach((b) => b.classList.remove('active'));
+  const sel = piece ? palette.querySelector(`[data-piece="${piece}"]`) : palette.querySelector('.palette-erase');
+  if (sel) sel.classList.add('active');
+}
+
+function buildGrid() {
+  gridBoard.innerHTML = '';
+  cellEls = {};
+  for (let rank = 8; rank >= 1; rank--) {
+    for (let f = 0; f < 8; f++) {
+      const file = 'abcdefgh'[f];
+      const sq = file + rank;
+      const cell = document.createElement('div');
+      cell.className = 'grid-cell ' + (((f + rank) % 2 === 0) ? 'grid-dark' : 'grid-light');
+      cell.dataset.square = sq;
+      cell.addEventListener('click', () => placeOrErase(sq, false));
+      cell.addEventListener('contextmenu', (e) => { e.preventDefault(); placeOrErase(sq, true); });
+      gridBoard.appendChild(cell);
+      cellEls[sq] = cell;
+    }
+  }
+}
+
+function placeOrErase(sq, forceErase) {
+  if (forceErase || !selectedPiece) {
+    delete board[sq];
+  } else {
+    board[sq] = selectedPiece;
+  }
+  renderGrid();
+  syncFenFromBoard();
+}
+
+function renderGrid() {
+  for (const [sq, cell] of Object.entries(cellEls)) {
+    cell.textContent = board[sq] ? GLYPHS[board[sq]] : '';
+    cell.classList.toggle('grid-white-piece', board[sq]?.[0] === 'w');
+    cell.classList.toggle('grid-black-piece', board[sq]?.[0] === 'b');
+  }
+}
+
+function boardToFenPlacement() {
+  const rows = [];
+  for (let rank = 8; rank >= 1; rank--) {
+    let row = '', empty = 0;
+    for (const file of 'abcdefgh') {
+      const piece = board[file + rank];
+      if (!piece) { empty++; continue; }
+      if (empty) { row += empty; empty = 0; }
+      const c = piece[1];
+      row += piece[0] === 'w' ? c : c.toLowerCase();
+    }
+    if (empty) row += empty;
+    rows.push(row);
+  }
+  return rows.join('/');
+}
+
+function loadFenIntoGrid(fen) {
+  board = {};
+  const placement = fen.split(' ')[0];
+  let rank = 8;
+  for (const rowStr of placement.split('/')) {
+    let file = 0;
+    for (const ch of rowStr) {
+      if (/[1-8]/.test(ch)) { file += parseInt(ch, 10); continue; }
+      const sq = 'abcdefgh'[file] + rank;
+      board[sq] = (ch === ch.toUpperCase() ? 'w' : 'b') + ch.toUpperCase();
+      file++;
+    }
+    rank--;
+  }
+  renderGrid();
+}
+
+function syncFenFromBoard() {
+  const stm = document.querySelector('input[name="stm"]:checked').value;
+  fenField.value = `${boardToFenPlacement()} ${stm} - - 0 1`;
+  fenError.style.display = 'none';
+}
+
+document.querySelectorAll('input[name="stm"]').forEach((r) => r.addEventListener('change', syncFenFromBoard));
+
+function openEditor(fen, sideToMove) {
+  editorArea.style.display = 'block';
+  const initialFen = fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+  if (sideToMove === 'b') document.querySelector('input[name="stm"][value="b"]').checked = true;
+
+  buildPalette();
+  selectPaletteItem('wP');
+  buildGrid();
+  loadFenIntoGrid(initialFen);
+  syncFenFromBoard();
+}
+
+fenField.addEventListener('change', () => {
+  const fen = fenField.value.trim();
+  try {
+    new Chess(fen);
+    fenError.style.display = 'none';
+    loadFenIntoGrid(fen);
+  } catch (e) {
+    fenError.textContent = 'That FEN is not valid.';
+    fenError.style.display = 'block';
+  }
+});
+
+// ── actions: Analyze / Play from here / Find in my games ──────────────
+
+document.getElementById('btn-analyze').addEventListener('click', async () => {
+  const fen = fenField.value.trim();
+  const panel = document.getElementById('analyze-result');
+  const linesEl = document.getElementById('analyze-lines');
+  panel.style.display = 'block';
+  linesEl.textContent = 'Analyzing…';
+  try {
+    const resp = await fetch('/api/analyze-position', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen }),
+    });
+    const data = await resp.json();
+    const lines = data.lines || [];
+    linesEl.innerHTML = lines.map((l) => {
+      const score = l.mate_in != null ? `M${Math.abs(l.mate_in)}` : (l.score_cp != null ? (l.score_cp/100).toFixed(1) : '—');
+      return `<div class="eval-line"><span class="eval-line-rank rank-${l.rank}"></span><span class="eval-line-score">${score}</span><span class="eval-line-moves">${l.preview_san || l.best_move_san || ''}</span></div>`;
+    }).join('') || '<span class="stat-sub">No lines returned.</span>';
+  } catch (e) {
+    linesEl.textContent = 'Analysis failed.';
+  }
+});
+
+document.getElementById('btn-search').addEventListener('click', (e) => {
+  e.preventDefault();
+  window.location.href = '/search/position?fen=' + encodeURIComponent(fenField.value.trim());
+});
+
+let playCg = null;
+let playChess = null;
+
+function computeDests(fen) {
+  const c = new Chess(fen);
+  const dests = new Map();
+  for (const m of c.moves({ verbose: true })) {
+    if (!dests.has(m.from)) dests.set(m.from, []);
+    dests.get(m.from).push(m.to);
+  }
+  return dests;
+}
+
+document.getElementById('btn-play').addEventListener('click', () => {
+  const fen = fenField.value.trim();
+  let valid;
+  try { valid = new Chess(fen); } catch (e) { fenError.textContent = 'Fix the FEN before playing.'; fenError.style.display = 'block'; return; }
+  playChess = valid;
+  document.getElementById('play-board-wrap').style.display = 'block';
+  if (playCg) { playCg.set({ fen: playChess.fen(), movable: { dests: computeDests(playChess.fen()) } }); return; }
+  playCg = Chessground(document.getElementById('play-board'), {
+    fen: playChess.fen(),
+    coordinates: true,
+    movable: { free: false, color: 'both', showDests: true, dests: computeDests(playChess.fen()), events: { after: onPlayMove } },
+    draggable: { enabled: true },
+  });
+});
+
+function onPlayMove(orig, dest) {
+  try {
+    playChess.move({ from: orig, to: dest, promotion: 'q' });
+  } catch (e) {
+    playCg.set({ fen: playChess.fen() });
+    return;
+  }
+  playCg.set({ fen: playChess.fen(), movable: { dests: computeDests(playChess.fen()) } });
+  maybeSuggestPlay();
+}
+
+document.getElementById('btn-play-flip').addEventListener('click', () => {
+  const cur = playCg.state.orientation;
+  playCg.set({ orientation: cur === 'white' ? 'black' : 'white' });
+});
+
+const playSuggestToggle = document.getElementById('play-suggest-toggle');
+playSuggestToggle.addEventListener('change', () => maybeSuggestPlay());
+
+async function maybeSuggestPlay() {
+  if (!playSuggestToggle.checked || !playChess) return;
+  try {
+    const resp = await fetch('/api/analyze-position', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen: playChess.fen() }),
+    });
+    const data = await resp.json();
+    const shapes = (data.lines || []).filter((l) => l.best_move_uci).map((l, i) => ({
+      orig: l.best_move_uci.slice(0, 2), dest: l.best_move_uci.slice(2, 4),
+      brush: ['green', 'blue', 'yellow'][i] || 'grey',
+    }));
+    playCg.set({ drawable: { autoShapes: shapes } });
+  } catch (e) { /* ignore */ }
+}
+</script>
+{% endblock %}
