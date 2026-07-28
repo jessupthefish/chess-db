@@ -22,7 +22,7 @@ from models import Event, Game, Player, PlayerIdentity, db
 from sync.common import fetch_with_retry, upsert_opening
 
 API_BASE = "https://lichess.org/api/broadcast"
-USER_AGENT = "chess-db-sync/2.0 (contact: you@stevenjessup.com)"
+USER_AGENT = "chess-db-sync/2.0 (contact: me@stevenjessup.com)"
 TIMEOUT = 60
 RETRIES = (1, 3, 10)
 
