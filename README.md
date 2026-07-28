@@ -216,8 +216,6 @@ chess-db/
 │   └── _game_row.html         # Shared game-table row partial
 ├── static/
 │   └── style.css              # Dark-mode-first responsive CSS
-├── docs/
-│   └── ARCHITECTURE.md        # Design reference for the analysis/dashboard/pro-games system
 ├── requirements.txt
 └── README.md
 ```
@@ -237,5 +235,4 @@ chess-db/
 - [ ] Opening repertoire explorer (move-sequence tree with win rate per branch)
 - [ ] Position/FEN search across your library
 - [ ] "Puzzles from your own games" trainer, built from analyzed blunders
-- [ ] Expand the curated pro/broadcast tournament lists (see `docs/ARCHITECTURE.md`
-      for the tournament-ID resolution methodology)
+- [ ] Expand the curated pro/broadcast tournament lists
