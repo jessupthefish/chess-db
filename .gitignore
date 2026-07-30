@@ -5,3 +5,9 @@ __pycache__/
 .DS_Store
 chess.db*
 .bin/
+BUILD_LOG.md
+CLAUDE.md
+docs/ARCHITECTURE.md
+
+# Internal working notes: removed from the public repo by the 2026-07-28
+# audit and kept local only. They live on disk and in the encrypted backup.
